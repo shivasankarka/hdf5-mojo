@@ -2,6 +2,11 @@
 
 High-level HDF5 bindings for Mojo — read and write HDF5 files using a clean, ergonomic API built on top of the HDF5 C library.
 
+## Motivation
+I'm currently porting several scientific-computation libraries to Mojo for my own research. HDF5 is widely used in my field and is a big dependency of one of the projects I'm porting (look out for that one :)). So I decided to write bindings for it.
+
+They work for now, but are still pretty rough. I have lots of ideas to improve the API and make it feel more like Python's `h5py` so that it's more polished and user-friendly.
+
 ## Overview
 
 The library is split into two layers:
