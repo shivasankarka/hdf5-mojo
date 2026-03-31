@@ -167,13 +167,12 @@ struct HDF5Lib(Movable):
             - Error: If the platform is not macOS or Linux.
             - Error: If `$CONDA_PREFIX` is not set at compile time.
         """
-        comptime libpath: String = getenv("CONDA_PREFIX", default="")
-        var final_path: String = ""
-        comptime if libpath != "":
+        var libpath: String = getenv("CONDA_PREFIX", default="")
+        if libpath != "":
             comptime if CompilationTarget.is_macos():
-                comptime final_path = libpath + "/lib/libhdf5.dylib"
+                libpath += "/lib/libhdf5.dylib"
             elif CompilationTarget.is_linux():
-                comptime final_path = libpath + "/lib/libhdf5.so"
+                libpath += "/lib/libhdf5.so"
             else:
                 raise Error(
                     "Unsupported platform; cannot determine library path"
