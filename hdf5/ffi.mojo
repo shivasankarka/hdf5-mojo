@@ -1,6 +1,6 @@
 # ===----------------------------------------------------------------------=== #
 # hdf5-bindings: HDF5 runtime bindings for Mojo
-# Distributed under the Apache 2.0 License with LLVM Exceptions.
+# Distributed under the Apache 2.0 License.
 # See LICENSE for more information.
 # ===----------------------------------------------------------------------=== #
 """
