@@ -53,7 +53,14 @@ Low-level round-trip write then read:
     _ = h5.close_file(fid)
 """
 
-from std.ffi import OwnedDLHandle, c_int, c_uint, c_long_long, c_ulong_long, c_char
+from std.ffi import (
+    OwnedDLHandle,
+    c_int,
+    c_uint,
+    c_long_long,
+    c_ulong_long,
+    c_char,
+)
 from std.memory import UnsafePointer
 from std.os import getenv
 from std.pathlib import Path, cwd
@@ -65,13 +72,13 @@ from std.sys.info import CompilationTarget
 # Type aliases
 # ===----------------------------------------------------------------------=== #
 
-comptime hid_t   = c_long_long
+comptime hid_t = c_long_long
 """HDF5 object identifier."""
-comptime herr_t  = c_int
+comptime herr_t = c_int
 """HDF5 error/status code."""
 comptime hsize_t = c_ulong_long
 """HDF5 dimension size."""
-comptime htri_t  = c_int         #
+comptime htri_t = c_int  #
 """HDF5 tri-state boolean."""
 comptime MutExt = MutExternalOrigin
 """Mutable external origin for pointers."""
@@ -80,38 +87,39 @@ comptime MutExt = MutExternalOrigin
 # HDF5 constants
 # ===----------------------------------------------------------------------=== #
 
-comptime H5F_ACC_TRUNC:  c_uint = 0x0002
+comptime H5F_ACC_TRUNC: c_uint = 0x0002
 """Create or overwrite."""
 comptime H5F_ACC_RDONLY: c_uint = 0x0000
 """Open read-only."""
-comptime H5F_ACC_RDWR:   c_uint = 0x0001
+comptime H5F_ACC_RDWR: c_uint = 0x0001
 """Open read-write."""
-comptime H5P_DEFAULT:    hid_t  = hid_t(0)
+comptime H5P_DEFAULT: hid_t = hid_t(0)
 """Default property list."""
-comptime H5S_ALL:        hid_t  = hid_t(0)
+comptime H5S_ALL: hid_t = hid_t(0)
 """Select entire dataspace."""
 
-comptime H5I_FILE:      c_int = c_int(1)
+comptime H5I_FILE: c_int = c_int(1)
 """H5I_type_t: file."""
-comptime H5I_GROUP:     c_int = c_int(2)
+comptime H5I_GROUP: c_int = c_int(2)
 """H5I_type_t: group."""
-comptime H5I_DATATYPE:  c_int = c_int(3)
+comptime H5I_DATATYPE: c_int = c_int(3)
 """H5I_type_t: datatype."""
 comptime H5I_DATASPACE: c_int = c_int(4)
 """H5I_type_t: dataspace."""
-comptime H5I_DATASET:   c_int = c_int(5)
+comptime H5I_DATASET: c_int = c_int(5)
 """H5I_type_t: dataset."""
-comptime H5I_ATTR:      c_int = c_int(6)
+comptime H5I_ATTR: c_int = c_int(6)
 """H5I_type_t: attribute."""
 
 comptime H5T_INTEGER: c_int = c_int(0)
 """H5T_class_t: integer."""
-comptime H5T_FLOAT:   c_int = c_int(1)
+comptime H5T_FLOAT: c_int = c_int(1)
 """H5T_class_t: floating point."""
 
 # ===----------------------------------------------------------------------=== #
 # HDF5Lib
 # ===----------------------------------------------------------------------=== #
+
 
 struct HDF5Lib(Movable):
     """Runtime loader and thin wrapper for the HDF5 C library.
@@ -134,17 +142,17 @@ struct HDF5Lib(Movable):
         ```
     """
 
-    var handle:        OwnedDLHandle
+    var handle: OwnedDLHandle
     """The DLHandle for HDF5."""
     var native_double: hid_t
     """H5T_NATIVE_DOUBLE (Float64)."""
-    var native_float:  hid_t
+    var native_float: hid_t
     """H5T_NATIVE_FLOAT (Float32)."""
-    var native_int:    hid_t
+    var native_int: hid_t
     """H5T_NATIVE_INT (platform int)."""
-    var native_int32:  hid_t
+    var native_int32: hid_t
     """H5T_NATIVE_INT32 (Int32)."""
-    var std_i32le:     hid_t
+    var std_i32le: hid_t
     """H5T_STD_I32LE (little-endian Int32)."""
 
     def __init__(out self) raises:
@@ -163,16 +171,28 @@ struct HDF5Lib(Movable):
             elif CompilationTarget.is_linux():
                 comptime final_path = libpath + "/lib/libhdf5.so"
             else:
-                raise Error("Unsupported platform; cannot determine library path")
+                raise Error(
+                    "Unsupported platform; cannot determine library path"
+                )
             self.handle = OwnedDLHandle(libpath)
             _ = self.handle.call["H5open", herr_t]()
-            self.native_double = self.handle.get_symbol[hid_t]("H5T_NATIVE_DOUBLE_g")[]
-            self.native_float  = self.handle.get_symbol[hid_t]("H5T_NATIVE_FLOAT_g")[]
-            self.native_int    = self.handle.get_symbol[hid_t]("H5T_NATIVE_INT_g")[]
-            self.native_int32  = self.handle.get_symbol[hid_t]("H5T_NATIVE_INT32_g")[]
-            self.std_i32le     = self.handle.get_symbol[hid_t]("H5T_STD_I32LE_g")[]
+            self.native_double = self.handle.get_symbol[hid_t](
+                "H5T_NATIVE_DOUBLE_g"
+            )[]
+            self.native_float = self.handle.get_symbol[hid_t](
+                "H5T_NATIVE_FLOAT_g"
+            )[]
+            self.native_int = self.handle.get_symbol[hid_t](
+                "H5T_NATIVE_INT_g"
+            )[]
+            self.native_int32 = self.handle.get_symbol[hid_t](
+                "H5T_NATIVE_INT32_g"
+            )[]
+            self.std_i32le = self.handle.get_symbol[hid_t]("H5T_STD_I32LE_g")[]
         else:
-            raise Error("HDF5: CONDA_PREFIX not set; cannot determine library path")
+            raise Error(
+                "HDF5: CONDA_PREFIX not set; cannot determine library path"
+            )
 
     def __init__(out self, libpath: String) raises:
         """Load `libpath` and resolve predefined type constants.
@@ -185,11 +205,17 @@ struct HDF5Lib(Movable):
         """
         self.handle = OwnedDLHandle(libpath)
         _ = self.handle.call["H5open", herr_t]()
-        self.native_double = self.handle.get_symbol[hid_t]("H5T_NATIVE_DOUBLE_g")[]
-        self.native_float  = self.handle.get_symbol[hid_t]("H5T_NATIVE_FLOAT_g")[]
-        self.native_int    = self.handle.get_symbol[hid_t]("H5T_NATIVE_INT_g")[]
-        self.native_int32  = self.handle.get_symbol[hid_t]("H5T_NATIVE_INT32_g")[]
-        self.std_i32le     = self.handle.get_symbol[hid_t]("H5T_STD_I32LE_g")[]
+        self.native_double = self.handle.get_symbol[hid_t](
+            "H5T_NATIVE_DOUBLE_g"
+        )[]
+        self.native_float = self.handle.get_symbol[hid_t](
+            "H5T_NATIVE_FLOAT_g"
+        )[]
+        self.native_int = self.handle.get_symbol[hid_t]("H5T_NATIVE_INT_g")[]
+        self.native_int32 = self.handle.get_symbol[hid_t](
+            "H5T_NATIVE_INT32_g"
+        )[]
+        self.std_i32le = self.handle.get_symbol[hid_t]("H5T_STD_I32LE_g")[]
 
     @staticmethod
     def load() raises -> HDF5Lib:
@@ -204,7 +230,12 @@ struct HDF5Lib(Movable):
         Returns:
             HDF5Lib - A loaded library instance.
         """
-        comptime candidates: List[String] = ["./libhdf5.dylib", "./libhdf5.so", "libhdf5.dylib", "libhdf5.so"]
+        comptime candidates: List[String] = [
+            "./libhdf5.dylib",
+            "./libhdf5.so",
+            "libhdf5.dylib",
+            "libhdf5.so",
+        ]
         for name in materialize[candidates]():
             try:
                 return HDF5Lib(name)
@@ -227,7 +258,10 @@ struct HDF5Lib(Movable):
             File id (hid_t) on success; < 0 on failure.
         """
         return self.handle.call["H5Fcreate", hid_t](
-            path.unsafe_ptr().bitcast[c_char](), flags, H5P_DEFAULT, H5P_DEFAULT,
+            path.unsafe_ptr().bitcast[c_char](),
+            flags,
+            H5P_DEFAULT,
+            H5P_DEFAULT,
         )
 
     def open_file(self, path: String, flags: c_uint = H5F_ACC_RDONLY) -> hid_t:
@@ -241,7 +275,9 @@ struct HDF5Lib(Movable):
             File id (hid_t) on success; < 0 on failure.
         """
         return self.handle.call["H5Fopen", hid_t](
-            path.unsafe_ptr().bitcast[c_char](), flags, H5P_DEFAULT,
+            path.unsafe_ptr().bitcast[c_char](),
+            flags,
+            H5P_DEFAULT,
         )
 
     def close_file(self, fid: hid_t) -> herr_t:
@@ -281,7 +317,9 @@ struct HDF5Lib(Movable):
             Group id (hid_t) on success; < 0 if not found.
         """
         return self.handle.call["H5Gopen2", hid_t](
-            loc_id, name.unsafe_ptr().bitcast[c_char](), H5P_DEFAULT,
+            loc_id,
+            name.unsafe_ptr().bitcast[c_char](),
+            H5P_DEFAULT,
         )
 
     def create_group(self, loc_id: hid_t, name: String) -> hid_t:
@@ -295,8 +333,11 @@ struct HDF5Lib(Movable):
             New group id (hid_t) on success; < 0 on error.
         """
         return self.handle.call["H5Gcreate2", hid_t](
-            loc_id, name.unsafe_ptr().bitcast[c_char](),
-            H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT,
+            loc_id,
+            name.unsafe_ptr().bitcast[c_char](),
+            H5P_DEFAULT,
+            H5P_DEFAULT,
+            H5P_DEFAULT,
         )
 
     def close_group(self, gid: hid_t) -> herr_t:
@@ -326,11 +367,15 @@ struct HDF5Lib(Movable):
         """
         var dims = alloc[hsize_t](1)
         dims[0] = hsize_t(n)
-        var sid = self.handle.call["H5Screate_simple", hid_t](c_int(1), dims, dims)
+        var sid = self.handle.call["H5Screate_simple", hid_t](
+            c_int(1), dims, dims
+        )
         dims.free()
         return sid
 
-    def create_dataspace_nd(self, ndims: Int, dims: UnsafePointer[hsize_t, MutExt]) -> hid_t:
+    def create_dataspace_nd(
+        self, ndims: Int, dims: UnsafePointer[hsize_t, MutExt]
+    ) -> hid_t:
         """Create a fixed-size N-D dataspace. ``dims`` must contain ``ndims`` values.
 
         Args:
@@ -340,7 +385,9 @@ struct HDF5Lib(Movable):
         Returns:
             Pass.
         """
-        return self.handle.call["H5Screate_simple", hid_t](c_int(ndims), dims, dims)
+        return self.handle.call["H5Screate_simple", hid_t](
+            c_int(ndims), dims, dims
+        )
 
     def get_dataset_space(self, did: hid_t) -> hid_t:
         """Call ``H5Dget_space``. Returns the dataspace id of an open dataset.
@@ -364,7 +411,9 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Sget_simple_extent_ndims", c_int](sid)
 
-    def get_space_dims(self, sid: hid_t, ndims: Int) -> UnsafePointer[hsize_t, MutExt]:
+    def get_space_dims(
+        self, sid: hid_t, ndims: Int
+    ) -> UnsafePointer[hsize_t, MutExt]:
         """Call ``H5Sget_simple_extent_dims`` and return an allocated dims array.
 
         Args:
@@ -391,12 +440,13 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Sclose", herr_t](sid)
 
-
     # ===------------------------------------------------------------------=== #
     # Dataset operations
     # ===------------------------------------------------------------------=== #
 
-    def create_dataset(self, loc_id: hid_t, name: String, type_id: hid_t, space_id: hid_t) -> hid_t:
+    def create_dataset(
+        self, loc_id: hid_t, name: String, type_id: hid_t, space_id: hid_t
+    ) -> hid_t:
         """Call ``H5Dcreate2`` with default property lists.
 
         Args:
@@ -409,8 +459,13 @@ struct HDF5Lib(Movable):
             Dataset id on success; < 0 on failure.
         """
         return self.handle.call["H5Dcreate2", hid_t](
-            loc_id, name.unsafe_ptr().bitcast[c_char](),
-            type_id, space_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT,
+            loc_id,
+            name.unsafe_ptr().bitcast[c_char](),
+            type_id,
+            space_id,
+            H5P_DEFAULT,
+            H5P_DEFAULT,
+            H5P_DEFAULT,
         )
 
     def open_dataset(self, loc_id: hid_t, name: String) -> hid_t:
@@ -424,10 +479,17 @@ struct HDF5Lib(Movable):
             Dataset id (hid_t) on success; < 0 if not found.
         """
         return self.handle.call["H5Dopen2", hid_t](
-            loc_id, name.unsafe_ptr().bitcast[c_char](), H5P_DEFAULT,
+            loc_id,
+            name.unsafe_ptr().bitcast[c_char](),
+            H5P_DEFAULT,
         )
 
-    def write_dataset(self, did: hid_t, mem_type_id: hid_t, buf: UnsafePointer[NoneType, MutExt]) -> herr_t:
+    def write_dataset(
+        self,
+        did: hid_t,
+        mem_type_id: hid_t,
+        buf: UnsafePointer[NoneType, MutExt],
+    ) -> herr_t:
         """Call ``H5Dwrite`` selecting the entire dataset (``H5S_ALL``).
 
         Args:
@@ -439,10 +501,20 @@ struct HDF5Lib(Movable):
             ≥ 0 on success, < 0 on failure.
         """
         return self.handle.call["H5Dwrite", herr_t](
-            did, mem_type_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, buf,
+            did,
+            mem_type_id,
+            H5S_ALL,
+            H5S_ALL,
+            H5P_DEFAULT,
+            buf,
         )
 
-    def read_dataset(self, did: hid_t, mem_type_id: hid_t, buf: UnsafePointer[NoneType, MutExt]) -> herr_t:
+    def read_dataset(
+        self,
+        did: hid_t,
+        mem_type_id: hid_t,
+        buf: UnsafePointer[NoneType, MutExt],
+    ) -> herr_t:
         """Call ``H5Dread`` selecting the entire dataset (``H5S_ALL``).
 
         Args:
@@ -454,7 +526,12 @@ struct HDF5Lib(Movable):
             ≥ 0 on success, < 0 on failure.
         """
         return self.handle.call["H5Dread", herr_t](
-            did, mem_type_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, buf,
+            did,
+            mem_type_id,
+            H5S_ALL,
+            H5S_ALL,
+            H5P_DEFAULT,
+            buf,
         )
 
     def close_dataset(self, did: hid_t) -> herr_t:
@@ -467,4 +544,26 @@ struct HDF5Lib(Movable):
             Pass.
         """
         return self.handle.call["H5Dclose", herr_t](did)
+
+    # ===------------------------------------------------------------------=== #
+    # Datatype operations
+    # ===------------------------------------------------------------------=== #
+
+    def get_dataset_type(self, did: hid_t) -> hid_t:
+        """Call ``H5Dget_type``. Caller must close the returned id with ``close_type``.
+        """
+        return self.handle.call["H5Dget_type", hid_t](did)
+
+    def close_type(self, tid: hid_t) -> herr_t:
+        """Call ``H5Tclose``."""
+        return self.handle.call["H5Tclose", herr_t](tid)
+
+    def get_type_class(self, tid: hid_t) -> c_int:
+        """Call ``H5Tget_class``. Returns ``H5T_INTEGER`` (0) or ``H5T_FLOAT`` (1), etc.
+        """
+        return self.handle.call["H5Tget_class", c_int](tid)
+
+    def get_type_size(self, tid: hid_t) -> c_ulong_long:
+        """Call ``H5Tget_size``. Returns the size of the datatype in bytes."""
+        return self.handle.call["H5Tget_size", c_ulong_long](tid)
 
