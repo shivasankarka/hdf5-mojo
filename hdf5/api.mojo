@@ -149,3 +149,135 @@ def _hdf5_type_id[dtype: DType](lib: HDF5Lib) -> hid_t:
         return lib.handle.get_symbol[hid_t]("H5T_NATIVE_INT64_g")[]
     else:
         return lib.native_double
+
+
+# ===----------------------------------------------------------------------=== #
+# H5File
+# ===----------------------------------------------------------------------=== #
+
+
+struct H5File:
+    """Ergonomic handle to an open HDF5 file.
+
+    Wraps `HDF5Lib` and manages all internal HDF5 handles (datasets,
+    dataspaces, attributes) automatically.  The file itself stays open until
+    `.close()` is called.
+
+    Notes:
+        - `HDF5Lib()` auto-detects the library from `$CONDA_PREFIX`.
+          Pass an explicit `lib_path` when the library is elsewhere.
+        - Datasets created by `write_1d` / `write_2d` must not already exist.
+        - Always call `.close()` when done to flush pending writes.
+
+    Examples:
+        ```mojo
+        var f = H5File("data.h5")
+        var xs = f.read_1d[DType.float64]("/xs")
+        xs.free()
+        f.close()
+
+        var f = H5File.create("out.h5")
+        f.write_1d[DType.float64]("/xs", ptr, n)
+        f.close()
+        ```
+    """
+
+    var _lib: HDF5Lib
+    var _fid: hid_t
+
+    # ===------------------------------------------------------------------=== #
+    # Constructors
+    # ===------------------------------------------------------------------=== #
+
+    def __init__(out self, path: String) raises:
+        """Open an existing HDF5 file read-only, auto-detecting the library.
+
+        Uses `HDF5Lib()` which reads `$CONDA_PREFIX` at compile time to
+        locate the shared library.
+
+        Args:
+            path: Filesystem path to an existing HDF5 file.
+
+        Raises:
+            - Error: If the library cannot be loaded.
+            - Error: If the file cannot be opened.
+        """
+        self._lib = HDF5Lib()
+        self._fid = self._lib.open_file(path, H5F_ACC_RDONLY)
+        if self._fid < 0:
+            raise Error("H5File: cannot open '" + path + "'")
+
+    def __init__(out self, path: String, lib_path: String) raises:
+        """Open an existing HDF5 file read-only using an explicit library path.
+
+        Args:
+            path: Filesystem path to an existing HDF5 file.
+            lib_path: Filesystem path to the HDF5 shared library,
+                e.g. ``"/usr/lib/libhdf5.so"``.
+
+        Raises:
+            - Error: If the library at `lib_path` cannot be loaded.
+            - Error: If the file cannot be opened.
+
+        Examples:
+            ```mojo
+            var f = H5File("data.h5", "/usr/lib/libhdf5.so")
+            ```
+        """
+        self._lib = HDF5Lib(lib_path)
+        self._fid = self._lib.open_file(path, H5F_ACC_RDONLY)
+        if self._fid < 0:
+            raise Error("H5File: cannot open '" + path + "'")
+
+    @staticmethod
+    def create(path: String) raises -> H5File:
+        """Create (or truncate) a file for writing, auto-detecting the library.
+
+        Args:
+            path: Filesystem path for the new HDF5 file.
+
+        Returns:
+            An `H5File` open for writing.
+
+        Raises:
+            - Error: If the library cannot be loaded.
+            - Error: If the file cannot be created.
+        """
+        var lib = HDF5Lib()
+        var fid = lib.create_file(path, H5F_ACC_TRUNC)
+        if fid < 0:
+            raise Error("H5File.create: cannot create '" + path + "'")
+        return H5File(lib^, fid)
+
+    @staticmethod
+    def create(path: String, lib_path: String) raises -> H5File:
+        """Create (or truncate) a file using an explicit library path.
+
+        Args:
+            path: Filesystem path for the new HDF5 file.
+            lib_path: Filesystem path to the HDF5 shared library.
+
+        Returns:
+            An `H5File` open for writing.
+
+        Raises:
+            - Error: If the library cannot be loaded.
+            - Error: If the file cannot be created.
+        """
+        var lib = HDF5Lib(lib_path)
+        var fid = lib.create_file(path, H5F_ACC_TRUNC)
+        if fid < 0:
+            raise Error("H5File.create: cannot create '" + path + "'")
+        return H5File(lib^, fid)
+
+    def __init__(out self, var lib: HDF5Lib, fid: hid_t):
+        # Private constructor used by the `create()` static methods.
+        self._lib = lib^
+        self._fid = fid
+
+    def close(self):
+        """Flush pending writes and close the file id.
+
+        Must be called when the file is no longer needed.
+        """
+        _ = self._lib.close_file(self._fid)
