@@ -391,3 +391,80 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Sclose", herr_t](sid)
 
+
+    # ===------------------------------------------------------------------=== #
+    # Dataset operations
+    # ===------------------------------------------------------------------=== #
+
+    def create_dataset(self, loc_id: hid_t, name: String, type_id: hid_t, space_id: hid_t) -> hid_t:
+        """Call ``H5Dcreate2`` with default property lists.
+
+        Args:
+            loc_id: Pass.
+            name: Pass.
+            type_id: Pass.
+            space_id: Pass.
+
+        Returns:
+            Dataset id on success; < 0 on failure.
+        """
+        return self.handle.call["H5Dcreate2", hid_t](
+            loc_id, name.unsafe_ptr().bitcast[c_char](),
+            type_id, space_id, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT,
+        )
+
+    def open_dataset(self, loc_id: hid_t, name: String) -> hid_t:
+        """Call ``H5Dopen2``.
+
+        Args:
+            loc_id: Pass.
+            name: Pass.
+
+        Returns:
+            Dataset id (hid_t) on success; < 0 if not found.
+        """
+        return self.handle.call["H5Dopen2", hid_t](
+            loc_id, name.unsafe_ptr().bitcast[c_char](), H5P_DEFAULT,
+        )
+
+    def write_dataset(self, did: hid_t, mem_type_id: hid_t, buf: UnsafePointer[NoneType, MutExt]) -> herr_t:
+        """Call ``H5Dwrite`` selecting the entire dataset (``H5S_ALL``).
+
+        Args:
+            did: Open dataset id.
+            mem_type_id: Memory datatype id (e.g. ``h5.native_double``).
+            buf: Data buffer. Cast a typed pointer with ``.bitcast[NoneType]()``.
+
+        Returns:
+            ≥ 0 on success, < 0 on failure.
+        """
+        return self.handle.call["H5Dwrite", herr_t](
+            did, mem_type_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, buf,
+        )
+
+    def read_dataset(self, did: hid_t, mem_type_id: hid_t, buf: UnsafePointer[NoneType, MutExt]) -> herr_t:
+        """Call ``H5Dread`` selecting the entire dataset (``H5S_ALL``).
+
+        Args:
+            did: Open dataset id.
+            mem_type_id: Memory datatype id for the destination buffer.
+            buf: Destination buffer, large enough for the full dataset.
+
+        Returns:
+            ≥ 0 on success, < 0 on failure.
+        """
+        return self.handle.call["H5Dread", herr_t](
+            did, mem_type_id, H5S_ALL, H5S_ALL, H5P_DEFAULT, buf,
+        )
+
+    def close_dataset(self, did: hid_t) -> herr_t:
+        """Call ``H5Dclose``.
+
+        Args:
+            did: Open dataset id.
+
+        Returns:
+            Pass.
+        """
+        return self.handle.call["H5Dclose", herr_t](did)
+
