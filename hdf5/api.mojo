@@ -469,3 +469,103 @@ struct H5File:
         var v = buf[0]
         buf.free()
         return v
+
+    # ===------------------------------------------------------------------=== #
+    # Writing
+    # ===------------------------------------------------------------------=== #
+
+    def write_1d[
+        dtype: DType
+    ](
+        self, path: String, data: UnsafePointer[Scalar[dtype], MutExt], n: Int
+    ) raises:
+        """Create and write a new 1-D dataset at `path` from `data`.
+
+        Parameters:
+            dtype: The `DType` of the data to write, e.g. `DType.float64`.
+
+        Args:
+            path: Absolute HDF5 path for the new dataset,
+                e.g. ``"/results/energies"``.
+            data: Source buffer of `n` elements of type `Scalar[dtype]`.
+            n: Number of elements in `data`.
+
+        Raises:
+            - Error: If the dataspace cannot be created.
+            - Error: If the dataset already exists or creation fails.
+            - Error: If the write fails.
+
+        Notes:
+            The dataset must not already exist.  Use `require_group` first
+            if the parent group needs to be created.
+        """
+        var sid = self._lib.create_dataspace_1d(n)
+        if sid < 0:
+            raise Error("H5File.write_1d: H5Screate_simple failed")
+        var tid = _hdf5_type_id[dtype](self._lib)
+        var did = self._lib.create_dataset(self._fid, path, tid, sid)
+        if did < 0:
+            _ = self._lib.close_dataspace(sid)
+            raise Error("H5File.write_1d: H5Dcreate2 failed for '" + path + "'")
+        var rc = self._lib.write_dataset(did, tid, data.bitcast[NoneType]())
+        _ = self._lib.close_dataset(did)
+        _ = self._lib.close_dataspace(sid)
+        if rc < 0:
+            raise Error("H5File.write_1d: H5Dwrite failed for '" + path + "'")
+
+    def write_2d[
+        dtype: DType
+    ](
+        self,
+        path: String,
+        data: UnsafePointer[Scalar[dtype], MutExt],
+        rows: Int,
+        cols: Int,
+    ) raises:
+        """Create and write a new 2-D dataset at `path` from `data` (row-major).
+
+        Parameters:
+            dtype: The `DType` of the data to write, e.g. `DType.float64`.
+
+        Args:
+            path: Absolute HDF5 path for the new dataset.
+            data: Source buffer of `rows * cols` elements in row-major order.
+            rows: Number of rows.
+            cols: Number of columns.
+
+        Raises:
+            - Error: If the dataspace cannot be created.
+            - Error: If the dataset already exists or creation fails.
+            - Error: If the write fails.
+        """
+        var dims = alloc[hsize_t](2)
+        dims[0] = hsize_t(rows)
+        dims[1] = hsize_t(cols)
+        var sid = self._lib.create_dataspace_nd(2, dims)
+        dims.free()
+        if sid < 0:
+            raise Error("H5File.write_2d: H5Screate_simple failed")
+        var tid = _hdf5_type_id[dtype](self._lib)
+        var did = self._lib.create_dataset(self._fid, path, tid, sid)
+        if did < 0:
+            _ = self._lib.close_dataspace(sid)
+            raise Error("H5File.write_2d: H5Dcreate2 failed for '" + path + "'")
+        var rc = self._lib.write_dataset(did, tid, data.bitcast[NoneType]())
+        _ = self._lib.close_dataset(did)
+        _ = self._lib.close_dataspace(sid)
+        if rc < 0:
+            raise Error("H5File.write_2d: H5Dwrite failed for '" + path + "'")
+
+    def require_group(self, name: String):
+        """Create a group at `name`, doing nothing if it already exists.
+
+        Args:
+            name: Absolute HDF5 path for the group, e.g. ``"/results"``.
+
+        Notes:
+            Safe to call multiple times on the same path.  Useful before
+            calling `write_1d` or `write_2d` inside a new group hierarchy.
+        """
+        var gid = self._lib.create_group(self._fid, name)
+        if gid >= 0:
+            _ = self._lib.close_group(gid)
