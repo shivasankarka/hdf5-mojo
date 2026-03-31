@@ -567,3 +567,54 @@ struct HDF5Lib(Movable):
         """Call ``H5Tget_size``. Returns the size of the datatype in bytes."""
         return self.handle.call["H5Tget_size", c_ulong_long](tid)
 
+
+    # ===------------------------------------------------------------------=== #
+    # Attribute operations
+    # ===------------------------------------------------------------------=== #
+
+    def open_attr(self, loc_id: hid_t, name: String) -> hid_t:
+        """Call ``H5Aopen``.
+
+        Returns
+        -------
+        hid_t
+            Attribute id on success; < 0 if not found.
+        """
+        return self.handle.call["H5Aopen", hid_t](
+            loc_id,
+            name.unsafe_ptr().bitcast[c_char](),
+            H5P_DEFAULT,
+        )
+
+    def read_attr(
+        self,
+        attr_id: hid_t,
+        mem_type_id: hid_t,
+        buf: UnsafePointer[NoneType, MutExt],
+    ) -> herr_t:
+        """Call ``H5Aread``. ``buf`` must hold one value of type ``mem_type_id``.
+        """
+        return self.handle.call["H5Aread", herr_t](attr_id, mem_type_id, buf)
+
+    def close_attr(self, attr_id: hid_t) -> herr_t:
+        """Call ``H5Aclose``."""
+        return self.handle.call["H5Aclose", herr_t](attr_id)
+
+    # ===------------------------------------------------------------------=== #
+    # Utility
+    # ===------------------------------------------------------------------=== #
+
+    def object_exists(self, loc_id: hid_t, name: String) -> Bool:
+        """Return ``True`` if a link ``name`` exists under ``loc_id`` (``H5Lexists``).
+        """
+        var rc = self.handle.call["H5Lexists", htri_t](
+            loc_id,
+            name.unsafe_ptr().bitcast[c_char](),
+            H5P_DEFAULT,
+        )
+        return rc > 0
+
+    def get_object_type(self, loc_id: hid_t) -> c_int:
+        """Call ``H5Iget_type``. Returns the ``H5I_type_t`` of an open object id.
+        """
+        return self.handle.call["H5Iget_type", c_int](loc_id)
