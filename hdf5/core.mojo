@@ -1,4 +1,65 @@
-from hdf5.bindings import (
+# ===----------------------------------------------------------------------=== #
+# hdf5-bindings: HDF5 runtime bindings for Mojo
+# Distributed under the Apache 2.0 License with LLVM Exceptions.
+# See LICENSE for more information.
+# ===----------------------------------------------------------------------=== #
+"""
+High-level HDF5 file API (`hdf5.core`)
+=======================================
+
+Provides two public types built on top of `hdf5.ffi`:
+
+- `NDArray[dtype]` — a heap-allocated, shaped array returned by read methods.
+- `H5File`         — an open HDF5 file with ergonomic read and write methods.
+
+All read methods discover dataset shape automatically by introspecting the
+file, so you never need to know sizes in advance.  All HDF5 handle lifetimes
+(dataset, dataspace, attribute ids) are managed internally — you only ever
+open and close the file itself.
+
+Supported DType values
+----------------------
+- ``DType.float64``  ↔  ``H5T_NATIVE_DOUBLE``
+- ``DType.float32``  ↔  ``H5T_NATIVE_FLOAT``
+- ``DType.int32``    ↔  ``H5T_NATIVE_INT32``
+- ``DType.int64``    ↔  ``H5T_NATIVE_INT64``
+
+Notes
+-----
+- `HDF5Lib()` auto-detects the library from `$CONDA_PREFIX`.  Pass an
+  explicit ``lib_path`` to the constructors when the library is elsewhere.
+- `NDArray` owns its memory.  Always call ``.free()`` when done.
+- Datasets must not already exist when calling ``write_1d`` / ``write_2d``.
+  Use ``require_group`` to create parent groups before writing.
+
+Examples
+--------
+Read an existing file:
+    ```mojo
+    from hdf5 import H5File
+
+    var f    = H5File("data.h5")
+    var arr  = f.read_1d[DType.float64]("/group/dataset")
+    var mat  = f.read_2d[DType.float64]("/group/matrix")
+    var attr = f.read_scalar_attr[DType.float64]("/group", "scale")
+    print(arr[0], mat[2, 3], attr)
+    arr.free(); mat.free()
+    f.close()
+    ```
+
+Create a new file and write data:
+    ```mojo
+    from hdf5 import H5File
+
+    var f = H5File.create("out.h5")
+    f.require_group("/results")
+    f.write_1d[DType.float64]("/results/energies", ptr, n)
+    f.write_2d[DType.float64]("/results/matrix",   ptr, rows, cols)
+    f.close()
+    ```
+"""
+
+from hdf5.ffi import (
     HDF5Lib,
     hid_t,
     hsize_t,
