@@ -59,6 +59,7 @@ from std.os import getenv
 from std.pathlib import Path, cwd
 from std.sys.info import CompilationTarget
 
+# TODO: Write docstrings for functions.
 
 # ===----------------------------------------------------------------------=== #
 # Type aliases
@@ -308,4 +309,85 @@ struct HDF5Lib(Movable):
             Pass.
         """
         return self.handle.call["H5Gclose", herr_t](gid)
+
+    # ===------------------------------------------------------------------=== #
+    # Dataspace operations
+    # ===------------------------------------------------------------------=== #
+
+    def create_dataspace_1d(self, n: Int) -> hid_t:
+        """
+        Create a fixed-size 1-D dataspace of length ``n`` via ``H5Screate_simple``.
+
+        Args:
+            n: Pass.
+
+        Returns:
+            Pass.
+        """
+        var dims = alloc[hsize_t](1)
+        dims[0] = hsize_t(n)
+        var sid = self.handle.call["H5Screate_simple", hid_t](c_int(1), dims, dims)
+        dims.free()
+        return sid
+
+    def create_dataspace_nd(self, ndims: Int, dims: UnsafePointer[hsize_t, MutExt]) -> hid_t:
+        """Create a fixed-size N-D dataspace. ``dims`` must contain ``ndims`` values.
+
+        Args:
+            ndims: Pass.
+            dims: Pass.
+
+        Returns:
+            Pass.
+        """
+        return self.handle.call["H5Screate_simple", hid_t](c_int(ndims), dims, dims)
+
+    def get_dataset_space(self, did: hid_t) -> hid_t:
+        """Call ``H5Dget_space``. Returns the dataspace id of an open dataset.
+
+        Args:
+            did: Pass.
+
+        Returns:
+            Pass.
+        """
+        return self.handle.call["H5Dget_space", hid_t](did)
+
+    def get_space_ndims(self, sid: hid_t) -> c_int:
+        """Call ``H5Sget_simple_extent_ndims``. Returns the number of dimensions.
+
+        Args:
+            sid: Pass.
+
+        Returns:
+            Pass.
+        """
+        return self.handle.call["H5Sget_simple_extent_ndims", c_int](sid)
+
+    def get_space_dims(self, sid: hid_t, ndims: Int) -> UnsafePointer[hsize_t, MutExt]:
+        """Call ``H5Sget_simple_extent_dims`` and return an allocated dims array.
+
+        Args:
+            sid: Pass.
+            ndims: Pass.
+
+        Returns:
+            Heap-allocated array of ``ndims`` dimension sizes. Caller must free this!
+        """
+        var dims = alloc[hsize_t](ndims)
+        _ = self.handle.call["H5Sget_simple_extent_dims", c_int](
+            sid, dims, UnsafePointer[hsize_t, MutExt]()
+        )
+        return dims
+
+    def close_dataspace(self, sid: hid_t) -> herr_t:
+        """Call ``H5Sclose``.
+
+        Args:
+            sid: Pass.
+
+        Returns:
+            Pass.
+        """
+        return self.handle.call["H5Sclose", herr_t](sid)
 
