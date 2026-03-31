@@ -1,8 +1,8 @@
 [workspace]
 authors = ["shivasankar <shivasankar.ka@gmail.com>"]
 channels = ["conda-forge", "https://conda.modular.com/max/"]
-name = "MojoSQUIDS"
-platforms = ["osx-arm64"]
+name = "hdf5-mojo"
+platforms = ["osx-arm64", "linux-64"]
 version = "0.1.0"
 
 [tasks]
