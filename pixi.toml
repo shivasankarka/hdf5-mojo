@@ -1,0 +1,15 @@
+[workspace]
+authors = ["shivasankar <shivasankar.ka@gmail.com>"]
+channels = ["conda-forge", "https://conda.modular.com/max/"]
+name = "MojoSQUIDS"
+platforms = ["osx-arm64"]
+version = "0.1.0"
+
+[tasks]
+format = "mojo format hdf5 && mojo format examples"
+package = "mojo package hdf5"
+demo = "mojo package hdf5 && mojo run -I ./ -I ./examples examples/demo_api.mojo"
+
+[dependencies]
+mojo = ">=0.26.2.0,<0.27"
+hdf5 = ">=2.1.0,<3"
