@@ -34,7 +34,6 @@ from hdf5 import H5File
 
 
 def main() raises:
-
     # ===----------------------------------------------------------------------=== #
     # 1. Open a file for reading
     # ===----------------------------------------------------------------------=== #
@@ -44,10 +43,14 @@ def main() raises:
     # 2. Read scalar attributes
     # ===----------------------------------------------------------------------=== #
     # Attributes can be Float64 or Int32 (pass the matching dtype).
-    var num_days     = f.read_scalar_attr[DType.int32]("/metadata", "num_days")
-    var num_stations = f.read_scalar_attr[DType.int32]("/metadata", "num_stations")
-    var base_year    = f.read_scalar_attr[DType.int32]("/metadata", "base_year")
-    var lat_origin   = f.read_scalar_attr[DType.float64]("/metadata", "lat_origin")
+    var num_days = f.read_scalar_attr[DType.int32]("/metadata", "num_days")
+    var num_stations = f.read_scalar_attr[DType.int32](
+        "/metadata", "num_stations"
+    )
+    var base_year = f.read_scalar_attr[DType.int32]("/metadata", "base_year")
+    var lat_origin = f.read_scalar_attr[DType.float64](
+        "/metadata", "lat_origin"
+    )
 
     print("=== Metadata attributes ===")
     print("  num_days     =", num_days)
@@ -136,7 +139,9 @@ def main() raises:
     means[2] = 25.3
     means[3] = 17.6
     means[4] = 21.0
-    out.write_1d[DType.float64]("/summary/mean_temp_c", means, Int(num_stations))
+    out.write_1d[DType.float64](
+        "/summary/mean_temp_c", means, Int(num_stations)
+    )
     means.free()
 
     # Write a 2-D Float64 dataset (3 days × 5 stations, row-major).
@@ -154,7 +159,12 @@ def main() raises:
     out.close()
     print("\n=== Wrote demo_output.h5 ===")
     print("  /summary/mean_temp_c          — 1-D Float64, length", num_stations)
-    print("  /summary/daily/temp_excerpt   — 2-D Float64,", n_days_out, "×", num_stations)
+    print(
+        "  /summary/daily/temp_excerpt   — 2-D Float64,",
+        n_days_out,
+        "×",
+        num_stations,
+    )
 
     # ===----------------------------------------------------------------------=== #
     # 9. Round-trip: read back what we wrote
