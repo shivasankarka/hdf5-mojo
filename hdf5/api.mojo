@@ -401,3 +401,71 @@ struct H5File:
             buf.free()
             raise Error("H5File.read_2d: H5Dread failed for '" + path + "'")
         return NDArray[dtype](buf, rows, cols)
+
+    def read_scalar_attr[
+        dtype: DType
+    ](self, loc_path: String, attr_name: String) raises -> Scalar[dtype]:
+        """Read a scalar attribute from a group or dataset.
+
+        Parameters:
+            dtype: The expected `DType` of the attribute value,
+                e.g. `DType.float64` or `DType.int32`.
+
+        Args:
+            loc_path: Absolute HDF5 path to the group or dataset that owns
+                the attribute, e.g. ``"/cross_sections"``.
+            attr_name: Name of the attribute, e.g. ``"min_energy"``.
+
+        Returns:
+            The scalar attribute value as `Scalar[dtype]`.
+
+        Raises:
+            - Error: If `loc_path` cannot be opened as a group or dataset.
+            - Error: If the attribute does not exist on `loc_path`.
+
+        Notes:
+            Tries to open `loc_path` as a group first; falls back to
+            opening it as a dataset if the group open fails.
+
+        Examples:
+            ```mojo
+            var emin = f.read_scalar_attr[DType.float64]("/cross_sections", "min_energy")
+            var n    = f.read_scalar_attr[DType.int32]("/cross_sections", "num_nodes")
+            ```
+        """
+        var loc = self._lib.open_group(self._fid, loc_path)
+
+        var is_group = loc >= 0
+        if not is_group:
+            loc = self._lib.open_dataset(self._fid, loc_path)
+            if loc < 0:
+                raise Error(
+                    "H5File.read_scalar_attr: cannot open '" + loc_path + "'"
+                )
+
+        var aid = self._lib.open_attr(loc, attr_name)
+        if aid < 0:
+            if is_group:
+                _ = self._lib.close_group(loc)
+            else:
+                _ = self._lib.close_dataset(loc)
+            raise Error(
+                "H5File.read_scalar_attr: attr '"
+                + attr_name
+                + "' not found on '"
+                + loc_path
+                + "'"
+            )
+
+        var buf = alloc[Scalar[dtype]](1)
+        _ = self._lib.read_attr(
+            aid, _hdf5_type_id[dtype](self._lib), buf.bitcast[NoneType]()
+        )
+        _ = self._lib.close_attr(aid)
+        if is_group:
+            _ = self._lib.close_group(loc)
+        else:
+            _ = self._lib.close_dataset(loc)
+        var v = buf[0]
+        buf.free()
+        return v
