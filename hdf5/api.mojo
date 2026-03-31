@@ -281,3 +281,123 @@ struct H5File:
         Must be called when the file is no longer needed.
         """
         _ = self._lib.close_file(self._fid)
+
+    # ===------------------------------------------------------------------=== #
+    # Reading
+    # ===------------------------------------------------------------------=== #
+
+    def read_1d[dtype: DType](self, path: String) raises -> NDArray[dtype]:
+        """Read the entire 1-D dataset at `path` and return it as an `NDArray`.
+
+        The dataset length is discovered automatically — no need to know the
+        size in advance.
+
+        Parameters:
+            dtype: The Mojo `DType` to read into, e.g. `DType.float64`.
+
+        Args:
+            path: Absolute HDF5 path to the dataset,
+                e.g. ``"/cross_sections/sigma_nu"``.
+
+        Returns:
+            A heap-allocated `NDArray[dtype]` of length `dim0`.
+            The caller must call `.free()` when done.
+
+        Raises:
+            - Error: If the dataset cannot be opened.
+            - Error: If the dataset is not 1-D.
+            - Error: If the read fails.
+
+        Examples:
+            ```mojo
+            var xs = f.read_1d[DType.float64]("/cross_sections/sigma_nu")
+            print(xs[0], xs.dim0)
+            xs.free()
+            ```
+        """
+        var did = self._lib.open_dataset(self._fid, path)
+        if did < 0:
+            raise Error("H5File.read_1d: cannot open '" + path + "'")
+        var sid = self._lib.get_dataset_space(did)
+        var ndims = self._lib.get_space_ndims(sid)
+        if ndims != 1:
+            _ = self._lib.close_dataspace(sid)
+            _ = self._lib.close_dataset(did)
+            raise Error(
+                "H5File.read_1d: '"
+                + path
+                + "' has "
+                + String(ndims)
+                + " dims, expected 1"
+            )
+        var dims = self._lib.get_space_dims(sid, 1)
+        var n = Int(dims[0])
+        dims.free()
+        _ = self._lib.close_dataspace(sid)
+        var buf = alloc[Scalar[dtype]](n)
+        var rc = self._lib.read_dataset(
+            did, _hdf5_type_id[dtype](self._lib), buf.bitcast[NoneType]()
+        )
+        _ = self._lib.close_dataset(did)
+        if rc < 0:
+            buf.free()
+            raise Error("H5File.read_1d: H5Dread failed for '" + path + "'")
+        return NDArray[dtype](buf, n)
+
+    def read_2d[dtype: DType](self, path: String) raises -> NDArray[dtype]:
+        """Read the entire 2-D dataset at `path` and return it as an `NDArray`.
+
+        Shape is discovered automatically.  Data is stored row-major;
+        element `(i, j)` is accessed with ``arr[i, j]``.
+
+        Parameters:
+            dtype: The Mojo `DType` to read into, e.g. `DType.float64`.
+
+        Args:
+            path: Absolute HDF5 path to the dataset.
+
+        Returns:
+            A heap-allocated `NDArray[dtype]` with shape `(dim0, dim1)`.
+            The caller must call `.free()` when done.
+
+        Raises:
+            - Error: If the dataset cannot be opened.
+            - Error: If the dataset is not 2-D.
+            - Error: If the read fails.
+
+        Examples:
+            ```mojo
+            var dxs = f.read_2d[DType.float64]("/differential/dsigma_nu")
+            print(dxs[5, 3], dxs.dim0, dxs.dim1)
+            dxs.free()
+            ```
+        """
+        var did = self._lib.open_dataset(self._fid, path)
+        if did < 0:
+            raise Error("H5File.read_2d: cannot open '" + path + "'")
+        var sid = self._lib.get_dataset_space(did)
+        var ndims = self._lib.get_space_ndims(sid)
+        if ndims != 2:
+            _ = self._lib.close_dataspace(sid)
+            _ = self._lib.close_dataset(did)
+            raise Error(
+                "H5File.read_2d: '"
+                + path
+                + "' has "
+                + String(ndims)
+                + " dims, expected 2"
+            )
+        var dims = self._lib.get_space_dims(sid, 2)
+        var rows = Int(dims[0])
+        var cols = Int(dims[1])
+        dims.free()
+        _ = self._lib.close_dataspace(sid)
+        var buf = alloc[Scalar[dtype]](rows * cols)
+        var rc = self._lib.read_dataset(
+            did, _hdf5_type_id[dtype](self._lib), buf.bitcast[NoneType]()
+        )
+        _ = self._lib.close_dataset(did)
+        if rc < 0:
+            buf.free()
+            raise Error("H5File.read_2d: H5Dread failed for '" + path + "'")
+        return NDArray[dtype](buf, rows, cols)
