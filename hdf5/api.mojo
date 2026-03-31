@@ -115,3 +115,37 @@ struct NDArray[dtype: DType]:
         Calling `free` more than once is undefined behaviour.
         """
         self.data.free()
+
+
+# ===----------------------------------------------------------------------=== #
+# Internal helper
+# ===----------------------------------------------------------------------=== #
+
+
+def _hdf5_type_id[dtype: DType](lib: HDF5Lib) -> hid_t:
+    """Map a compile-time `DType` to the matching HDF5 predefined type id.
+
+    Parameters:
+        dtype: The Mojo `DType` to map, e.g. `DType.float64`.
+
+    Args:
+        lib: A loaded `HDF5Lib` instance whose predefined type fields are used.
+
+    Returns:
+        The `hid_t` for the corresponding HDF5 native type.  Falls back to
+        `lib.native_double` for unrecognised dtypes.
+
+    Notes:
+        The mapping is resolved entirely at compile time via `comptime if`,
+        so there is no runtime dispatch overhead.
+    """
+    comptime if dtype == DType.float64:
+        return lib.native_double
+    elif dtype == DType.float32:
+        return lib.native_float
+    elif dtype == DType.int32:
+        return lib.native_int32
+    elif dtype == DType.int64:
+        return lib.handle.get_symbol[hid_t]("H5T_NATIVE_INT64_g")[]
+    else:
+        return lib.native_double
