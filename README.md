@@ -1,6 +1,6 @@
 # hdf5-mojo
 
-High-level HDF5 bindings for Mojo — read and write HDF5 files using a clean, ergonomic API that wraps the HDF5 C library.
+High-level HDF5 bindings for Mojo: Read and write HDF5 files using a clean, ergonomic API that wraps the HDF5 C library.
 
 ## Motivation
 I'm currently porting several scientific-computation libraries to Mojo for my own research. HDF5 is widely used in my field and is a big dependency of one of the projects I'm porting (look out for that one :)). So I decided to write bindings for it.
