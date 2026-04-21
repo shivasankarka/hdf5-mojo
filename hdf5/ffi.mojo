@@ -507,11 +507,13 @@ struct HDF5Lib(Movable):
             H5P_DEFAULT,
         )
 
-    def write_dataset(
+    def write_dataset[
+        origin: MutOrigin, //
+    ](
         self,
         did: hid_t,
         mem_type_id: hid_t,
-        buf: UnsafePointer[NoneType, MutExt],
+        buf: UnsafePointer[NoneType, origin],
     ) -> herr_t:
         """Call ``H5Dwrite`` to write the entire dataset from a memory buffer.
 
@@ -537,11 +539,13 @@ struct HDF5Lib(Movable):
             buf,
         )
 
-    def read_dataset(
+    def read_dataset[
+        origin: MutOrigin, //
+    ](
         self,
         did: hid_t,
         mem_type_id: hid_t,
-        buf: UnsafePointer[NoneType, MutExt],
+        buf: UnsafePointer[NoneType, origin],
     ) -> herr_t:
         """Call ``H5Dread`` to read the entire dataset into a memory buffer.
 
@@ -648,11 +652,13 @@ struct HDF5Lib(Movable):
             H5P_DEFAULT,
         )
 
-    def read_attr(
+    def read_attr[
+        origin: MutOrigin, //
+    ](
         self,
         attr_id: hid_t,
         mem_type_id: hid_t,
-        buf: UnsafePointer[NoneType, MutExt],
+        buf: UnsafePointer[NoneType, origin],
     ) -> herr_t:
         """Call ``H5Aread`` to read an attribute value into a memory buffer.
 
@@ -746,13 +752,15 @@ struct HDF5Lib(Movable):
     # Additional operations for h5py-compatible API
     # ===------------------------------------------------------------------=== #
 
-    def write_attr(
+    def write_attr[
+        origin: MutOrigin, //
+    ](
         self,
         loc_id: hid_t,
         name: String,
         mem_type_id: hid_t,
         space_id: hid_t,
-        buf: UnsafePointer[NoneType, MutExt],
+        buf: UnsafePointer[NoneType, origin],
     ) -> herr_t:
         """Call ``H5Acreate2`` + ``H5Awrite`` to create and write an attribute.
 
@@ -872,7 +880,11 @@ struct HDF5Lib(Movable):
         )
         var result = ""
         if name_len > 0:
-            result = String(unsafe_from_utf8=Span[Byte](ptr=buf.bitcast[UInt8](), length=Int(name_len)))
+            result = String(
+                unsafe_from_utf8=Span[Byte](
+                    ptr=buf.bitcast[UInt8](), length=Int(name_len)
+                )
+            )
         buf.free()
         return result
 
@@ -918,9 +930,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Pclose", herr_t](dcpl)
 
-    def get_chunk_dims(
-        self, dcpl: hid_t, ndims: Int
-    ) -> Int:
+    def get_chunk_dims(self, dcpl: hid_t, ndims: Int) -> Int:
         """Call ``H5Pget_chunk`` to get chunk dimensions.
 
         Args:
@@ -931,7 +941,9 @@ struct HDF5Lib(Movable):
             Number of chunk dimensions, or 0 if not chunked.
         """
         var dims = alloc[hsize_t](ndims)
-        var rc = self.handle.call["H5Pget_chunk", c_int](dcpl, c_int(ndims), dims)
+        var rc = self.handle.call["H5Pget_chunk", c_int](
+            dcpl, c_int(ndims), dims
+        )
         dims.free()
         return Int(rc)
 
@@ -979,7 +991,11 @@ struct HDF5Lib(Movable):
         var len = self.handle.call["H5Fget_name", c_int](fid, buf)
         var result = ""
         if len > 0:
-            result = String(unsafe_from_utf8=Span[Byte](ptr=buf.bitcast[UInt8](), length=Int(len)))
+            result = String(
+                unsafe_from_utf8=Span[Byte](
+                    ptr=buf.bitcast[UInt8](), length=Int(len)
+                )
+            )
         buf.free()
         return result
 
