@@ -889,3 +889,162 @@ struct HDF5Lib(Movable):
             The attribute name.
         """
         return self.get_attr_name_by_idx(loc_id, idx)
+
+    # ===------------------------------------------------------------------=== #
+    # Dataset properties (chunks, maxshape, resize)
+    # ===------------------------------------------------------------------=== #
+
+    def get_space_maxdims(
+        self, sid: hid_t, ndims: Int
+    ) -> UnsafePointer[hsize_t, MutExt]:
+        """Call ``H5Sget_simple_extent_maxdims`` to get max dimensions.
+
+        Args:
+            sid: An open dataspace id.
+            ndims: The number of dimensions.
+
+        Returns:
+            A heap-allocated array of max dimensions.
+            Caller must call `.free()` on the result.
+        """
+        var maxdims = alloc[hsize_t](ndims)
+        _ = self.handle.call["H5Sget_simple_extent_maxdims", c_int](
+            sid, maxdims
+        )
+        return maxdims
+
+    def get_dcpl(self, did: hid_t) -> hid_t:
+        """Call ``H5Dget_create_plist`` to get dataset creation property list.
+
+        Args:
+            did: An open dataset id.
+
+        Returns:
+            A valid property list id. Caller must close it with `close_dcpl`.
+        """
+        return self.handle.call["H5Dget_create_plist", hid_t](did)
+
+    def close_dcpl(self, dcpl: hid_t) -> herr_t:
+        """Call ``H5Pclose`` to release a property list id.
+
+        Args:
+            dcpl: A property list id.
+
+        Returns:
+            >= 0 on success; < 0 on failure.
+        """
+        return self.handle.call["H5Pclose", herr_t](dcpl)
+
+    def get_chunk_dims(
+        self, dcpl: hid_t, ndims: Int
+    ) -> UnsafePointer[hsize_t, MutExt]:
+        """Call ``H5Pget_chunk`` to get chunk dimensions.
+
+        Args:
+            dcpl: A dataset creation property list.
+            ndims: Number of dimensions.
+
+        Returns:
+            A heap-allocated array of chunk dimensions, or zeros if not chunked.
+            Caller must call `.free()` on the result.
+        """
+        var dims = alloc[hsize_t](ndims)
+        _ = self.handle.call["H5Pget_chunk", c_int](dcpl, c_int(ndims), dims)
+        return dims
+
+    def resize_dataset(
+        self, did: hid_t, size: hsize_t
+    ) -> herr_t:
+        """Call ``H5Dset_extent`` to resize a dataset along axis 0.
+
+        Args:
+            did: An open dataset id.
+            size: The new size for axis 0.
+
+        Returns:
+            >= 0 on success; < 0 on failure.
+        """
+        var dims = alloc[hsize_t](1)
+        dims[0] = size
+        var rc = self.handle.call["H5Dset_extent", herr_t](did, dims)
+        dims.free()
+        return rc
+
+    # ===------------------------------------------------------------------=== #
+    # File and parent references
+    # ===------------------------------------------------------------------=== #
+
+    def get_file_id(self, loc_id: hid_t) -> hid_t:
+        """Call ``H5Iget_file_id`` to get the parent file for any object.
+
+        Args:
+            loc_id: Any open object id.
+
+        Returns:
+            The file id. Caller must close it.
+        """
+        return self.handle.call["H5Iget_file_id", hid_t](loc_id)
+
+    def get_file_name(self, fid: hid_t) -> String:
+        """Call ``H5Fget_name`` to get the filename from a file id.
+
+        Args:
+            fid: An open file id.
+
+        Returns:
+            The filename as a String.
+        """
+        var buf = alloc[c_char](512)
+        var len = self.handle.call["H5Fget_name", c_int](fid, buf)
+        var result = ""
+        if len > 0:
+            result = String(buf)
+        buf.free()
+        return result
+
+    # ===------------------------------------------------------------------=== #
+    # require_dataset
+    # ===------------------------------------------------------------------=== #
+
+    def require_dataset(
+        self, loc_id: hid_t, name: String, shape: List[Int], dtype: hid_t,
+    ) -> hid_t:
+        """Open an existing dataset or create a new one.
+
+        If the dataset exists, returns its id. If not, creates it.
+
+        Args:
+            loc_id: File or group id.
+            name: Name of the dataset.
+            shape: Shape for the new dataset if created.
+            dtype: HDF5 type id.
+
+        Returns:
+            A valid dataset id on success; < 0 on failure.
+        """
+        var did = self.handle.call["H5Dopen2", hid_t](
+            loc_id,
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            H5P_DEFAULT,
+        )
+        if did >= 0:
+            return did
+        var ndims = len(shape)
+        var dims = alloc[hsize_t](ndims)
+        for i in range(ndims):
+            dims[i] = hsize_t(shape[i])
+        var sid = self.handle.call["H5Screate_simple", hid_t](c_int(ndims), dims, dims)
+        dims.free()
+        if sid < 0:
+            return hid_t(-1)
+        did = self.handle.call["H5Dcreate2", hid_t](
+            loc_id,
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            dtype,
+            sid,
+            H5P_DEFAULT,
+            H5P_DEFAULT,
+            H5P_DEFAULT,
+        )
+        _ = self.handle.call["H5Sclose", herr_t](sid)
+        return did
