@@ -1090,6 +1090,14 @@ struct File(Movable):
             self._closed = True
             self._lib.free()
 
+    def flush(self):
+        """Flush pending writes to disk.
+
+        Does not close the file.
+        """
+        if not self._closed and self._fid >= 0:
+            _ = self._lib[].flush(self._fid)
+
     fn filename(self) -> String:
         """Get the filename.
 
@@ -1253,14 +1261,6 @@ struct File(Movable):
         """
         var root = Group(self._lib, self._fid, "/", is_file=True)
         return root.create_dataset_with_data[dtype](name, shape, data)
-
-    def flush(self):
-        """Flush pending writes to disk.
-
-        Does not close the file.
-        """
-        if not self._closed and self._fid >= 0:
-            _ = self._lib[].flush(self._fid)
 
     def __bool__(self) -> Bool:
         """Check if the file is open.
