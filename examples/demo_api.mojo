@@ -102,11 +102,14 @@ def main() raises:
     print("  row 0 (day 1):", end="")
     for s in range(Int(num_stations)):
         print("", temp.item(0, s), end="")
+    # or use ndarray syntax to get the first row with temp[0, :]!
     print()
     print("  col 0 (station 1, first 5 days):", end="")
     for d in range(5):
-        print("", temp.item(d, 0), end="")
+        print("", temp.get(d, 0), end="")
+    # or use temp[:, 0] to get the first column (all days for station 1).
     print()
+
 
     # ===----------------------------------------------------------------------=== #
     # 6. Read a 2-D Float32 dataset
