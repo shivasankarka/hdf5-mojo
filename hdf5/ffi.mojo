@@ -62,11 +62,15 @@ from std.ffi import (
     c_long_long,
     c_ulong_long,
     c_char,
+    c_ssize_t,
 )
 from std.memory import UnsafePointer
 from std.os import getenv
 from std.pathlib import Path, cwd
 from std.sys.info import CompilationTarget
+
+fn _cstr(s: String) -> String:
+    return s + "\0"
 
 # ===----------------------------------------------------------------------=== #
 # Type aliases
@@ -132,15 +136,6 @@ struct HDF5Lib(Movable):
     Notes:
         Use `HDF5Lib()` (no arguments) to auto-detect the library from
         `$CONDA_PREFIX`, or pass an explicit path with `HDF5Lib(libpath)`.
-
-    Examples:
-        ```mojo
-        from hdf5.bindings import HDF5Lib
-        var h5 = HDF5Lib()                   # auto-detect
-        var h5 = HDF5Lib("./libhdf5.dylib")  # explicit path
-        var fid = h5.create_file("out.h5")
-        _ = h5.close_file(fid)
-        ```
     """
 
     var handle: OwnedDLHandle
@@ -179,6 +174,11 @@ struct HDF5Lib(Movable):
                 )
             self.handle = OwnedDLHandle(libpath)
             _ = self.handle.call["H5open", herr_t]()
+            _ = self.handle.call["H5Eset_auto2", herr_t](
+                hid_t(0),
+                UnsafePointer[NoneType, MutExt](),
+                UnsafePointer[NoneType, MutExt](),
+            )
             self.native_double = self.handle.get_symbol[hid_t](
                 "H5T_NATIVE_DOUBLE_g"
             )[]
@@ -210,6 +210,11 @@ struct HDF5Lib(Movable):
         """
         self.handle = OwnedDLHandle(libpath)
         _ = self.handle.call["H5open", herr_t]()
+        _ = self.handle.call["H5Eset_auto2", herr_t](
+            hid_t(0),
+            UnsafePointer[NoneType, MutExt](),
+            UnsafePointer[NoneType, MutExt](),
+        )
         self.native_double = self.handle.get_symbol[hid_t](
             "H5T_NATIVE_DOUBLE_g"
         )[]
@@ -264,7 +269,7 @@ struct HDF5Lib(Movable):
             A valid file id (`hid_t`) on success; < 0 on failure.
         """
         return self.handle.call["H5Fcreate", hid_t](
-            path.unsafe_ptr().bitcast[c_char](),
+            _cstr(path).unsafe_ptr().bitcast[c_char](),
             flags,
             H5P_DEFAULT,
             H5P_DEFAULT,
@@ -282,7 +287,7 @@ struct HDF5Lib(Movable):
             A valid file id (`hid_t`) on success; < 0 on failure.
         """
         return self.handle.call["H5Fopen", hid_t](
-            path.unsafe_ptr().bitcast[c_char](),
+            _cstr(path).unsafe_ptr().bitcast[c_char](),
             flags,
             H5P_DEFAULT,
         )
@@ -329,7 +334,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Gopen2", hid_t](
             loc_id,
-            name.unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
             H5P_DEFAULT,
         )
 
@@ -345,7 +350,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Gcreate2", hid_t](
             loc_id,
-            name.unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
             H5P_DEFAULT,
             H5P_DEFAULT,
             H5P_DEFAULT,
@@ -475,7 +480,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Dcreate2", hid_t](
             loc_id,
-            name.unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
             type_id,
             space_id,
             H5P_DEFAULT,
@@ -496,7 +501,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Dopen2", hid_t](
             loc_id,
-            name.unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
             H5P_DEFAULT,
         )
 
@@ -637,7 +642,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Aopen", hid_t](
             loc_id,
-            name.unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
             H5P_DEFAULT,
         )
 
@@ -691,7 +696,7 @@ struct HDF5Lib(Movable):
         """
         var rc = self.handle.call["H5Lexists", htri_t](
             loc_id,
-            name.unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
             H5P_DEFAULT,
         )
         return rc > 0
@@ -707,3 +712,180 @@ struct HDF5Lib(Movable):
             ``H5I_DATASET`` (5), etc. Returns ``H5I_BADID`` (< 0) on failure.
         """
         return self.handle.call["H5Iget_type", c_int](loc_id)
+
+    def open_object(self, loc_id: hid_t, name: String) -> hid_t:
+        """Call ``H5Oopen`` to open any object by name.
+
+        Args:
+            loc_id: File or group id to resolve `name` from.
+            name: Absolute or relative HDF5 path to the object.
+
+        Returns:
+            A valid object id on success; < 0 on failure.
+        """
+        return self.handle.call["H5Oopen", hid_t](
+            loc_id,
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            H5P_DEFAULT,
+        )
+
+    def close_object(self, oid: hid_t) -> herr_t:
+        """Call ``H5Oclose`` to release an object id.
+
+        Args:
+            oid: An object id returned by `open_object`.
+
+        Returns:
+            ≥ 0 on success; < 0 on failure.
+        """
+        return self.handle.call["H5Oclose", herr_t](oid)
+
+    # ===------------------------------------------------------------------=== #
+    # Additional operations for h5py-compatible API
+    # ===------------------------------------------------------------------=== #
+
+    def write_attr(
+        self,
+        loc_id: hid_t,
+        name: String,
+        mem_type_id: hid_t,
+        space_id: hid_t,
+        buf: UnsafePointer[NoneType, MutExt],
+    ) -> herr_t:
+        """Call ``H5Acreate2`` + ``H5Awrite`` to create and write an attribute.
+
+        Args:
+            loc_id: File, group, or dataset id that will own the attribute.
+            name: Name of the attribute.
+            mem_type_id: HDF5 type id for the data.
+            space_id: Dataspace describing attribute shape.
+            buf: Source data buffer.
+
+        Returns:
+            >= 0 on success; < 0 on failure.
+        """
+        var aid = self.handle.call["H5Acreate2", hid_t](
+            loc_id,
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            mem_type_id,
+            space_id,
+            H5P_DEFAULT,
+            H5P_DEFAULT,
+        )
+        if aid < 0:
+            return herr_t(-1)
+        var rc = self.handle.call["H5Awrite", herr_t](aid, mem_type_id, buf)
+        _ = self.handle.call["H5Aclose", herr_t](aid)
+        return rc
+
+    def create_attr_dataspace_1d(self, n: Int) -> hid_t:
+        """Create a 1-D dataspace for an attribute.
+
+        Args:
+            n: Number of elements.
+
+        Returns:
+            A valid dataspace id on success; < 0 on failure.
+        """
+        var dims = alloc[hsize_t](1)
+        dims[0] = hsize_t(n)
+        var sid = self.handle.call["H5Screate_simple", hid_t](
+            c_int(1), dims, dims
+        )
+        dims.free()
+        return sid
+
+    def create_attr_dataspace_scalar(self) -> hid_t:
+        """Create a scalar dataspace for a scalar attribute.
+
+        Returns:
+            A valid dataspace id on success; < 0 on failure.
+        """
+        return self.handle.call["H5Screate", hid_t](
+            self.handle.get_symbol[c_int]("H5S_SCALAR_g")[],
+        )
+
+    def delete_object(self, loc_id: hid_t, name: String) -> herr_t:
+        """Call ``H5Ldelete`` to remove a link (dataset, group, etc.).
+
+        Args:
+            loc_id: File or group id containing the link.
+            name: Name of the link to delete.
+
+        Returns:
+            >= 0 on success; < 0 on failure.
+        """
+        return self.handle.call["H5Ldelete", herr_t](
+            loc_id,
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            H5P_DEFAULT,
+        )
+
+    def delete_attr(self, loc_id: hid_t, name: String) -> herr_t:
+        """Call ``H5Adelete`` to remove an attribute.
+
+        Args:
+            loc_id: File, group, or dataset id owning the attribute.
+            name: Name of the attribute to delete.
+
+        Returns:
+            >= 0 on success; < 0 on failure.
+        """
+        return self.handle.call["H5Adelete", herr_t](
+            loc_id,
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
+        )
+
+    def get_num_attrs(self, loc_id: hid_t) -> c_int:
+        """Call ``H5Aget_num_attrs`` to get the number of attributes.
+
+        Args:
+            loc_id: File, group, or dataset id.
+
+        Returns:
+            Number of attributes; < 0 on failure.
+        """
+        return self.handle.call["H5Aget_num_attrs", c_int](loc_id)
+
+    def get_attr_name_by_idx(self, loc_id: hid_t, idx: Int) -> String:
+        """Call ``H5Aget_name_by_idx`` to get an attribute name by index.
+
+        Args:
+            loc_id: File, group, or dataset id.
+            idx: Zero-based index.
+
+        Returns:
+            The attribute name as a String.
+        """
+        var buf_size: Int = 256
+        var buf = alloc[c_char](buf_size)
+        # var dot = String(".\0")
+        # var name_len = self.handle.call["H5Aget_name_by_idx", c_ssize_t](
+        #     loc_id,
+        #     dot.unsafe_ptr().bitcast[c_char](),
+        #     c_int(0),
+        #     c_int(0),
+        #     hsize_t(idx),
+        #     buf,
+        #     c_ulong_long(buf_size),
+        #     H5P_DEFAULT,
+        # )
+        var result = String(buf)
+        buf.free()
+        return result
+
+    def get_attr_info_by_idx(
+        self,
+        loc_id: hid_t,
+        idx: Int,
+    ) -> String:
+        """Get attribute name by index.
+
+        Args:
+            loc_id: File, group, or dataset id.
+            idx: Zero-based index.
+
+        Returns:
+            The attribute name.
+        """
+        return self.get_attr_name_by_idx(loc_id, idx)
