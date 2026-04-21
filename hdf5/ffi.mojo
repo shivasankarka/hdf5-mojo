@@ -69,8 +69,10 @@ from std.os import getenv
 from std.pathlib import Path, cwd
 from std.sys.info import CompilationTarget
 
+
 fn _cstr(s: String) -> String:
     return s + "\0"
+
 
 # ===----------------------------------------------------------------------=== #
 # Type aliases
@@ -801,9 +803,7 @@ struct HDF5Lib(Movable):
         Returns:
             A valid dataspace id on success; < 0 on failure.
         """
-        return self.handle.call["H5Screate", hid_t](
-            self.handle.get_symbol[c_int]("H5S_SCALAR_g")[],
-        )
+        return self.handle.call["H5Screate", hid_t](c_int(0))
 
     def delete_object(self, loc_id: hid_t, name: String) -> herr_t:
         """Call ``H5Ldelete`` to remove a link (dataset, group, etc.).
@@ -894,25 +894,6 @@ struct HDF5Lib(Movable):
     # Dataset properties (chunks, maxshape, resize)
     # ===------------------------------------------------------------------=== #
 
-    def get_space_maxdims(
-        self, sid: hid_t, ndims: Int
-    ) -> UnsafePointer[hsize_t, MutExt]:
-        """Call ``H5Sget_simple_extent_maxdims`` to get max dimensions.
-
-        Args:
-            sid: An open dataspace id.
-            ndims: The number of dimensions.
-
-        Returns:
-            A heap-allocated array of max dimensions.
-            Caller must call `.free()` on the result.
-        """
-        var maxdims = alloc[hsize_t](ndims)
-        _ = self.handle.call["H5Sget_simple_extent_maxdims", c_int](
-            sid, maxdims
-        )
-        return maxdims
-
     def get_dcpl(self, did: hid_t) -> hid_t:
         """Call ``H5Dget_create_plist`` to get dataset creation property list.
 
@@ -952,9 +933,7 @@ struct HDF5Lib(Movable):
         _ = self.handle.call["H5Pget_chunk", c_int](dcpl, c_int(ndims), dims)
         return dims
 
-    def resize_dataset(
-        self, did: hid_t, size: hsize_t
-    ) -> herr_t:
+    def resize_dataset(self, did: hid_t, size: hsize_t) -> herr_t:
         """Call ``H5Dset_extent`` to resize a dataset along axis 0.
 
         Args:
@@ -1007,7 +986,11 @@ struct HDF5Lib(Movable):
     # ===------------------------------------------------------------------=== #
 
     def require_dataset(
-        self, loc_id: hid_t, name: String, shape: List[Int], dtype: hid_t,
+        self,
+        loc_id: hid_t,
+        name: String,
+        shape: List[Int],
+        dtype: hid_t,
     ) -> hid_t:
         """Open an existing dataset or create a new one.
 
@@ -1033,7 +1016,9 @@ struct HDF5Lib(Movable):
         var dims = alloc[hsize_t](ndims)
         for i in range(ndims):
             dims[i] = hsize_t(shape[i])
-        var sid = self.handle.call["H5Screate_simple", hid_t](c_int(ndims), dims, dims)
+        var sid = self.handle.call["H5Screate_simple", hid_t](
+            c_int(ndims), dims, dims
+        )
         dims.free()
         if sid < 0:
             return hid_t(-1)
