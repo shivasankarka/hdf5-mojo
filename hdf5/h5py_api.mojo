@@ -63,10 +63,14 @@ struct NDArray[dtype: DType](Copyable, Movable):
     """Heap-allocated shaped array for dataset reads.
 
     Wraps a heap buffer with shape information for 1-D and 2-D arrays.
+    Call `.free()` when done to release memory.
 
-    Args:
-        data: Heap-allocated buffer (owned by this struct).
-        n: Total number of elements.
+    Example::
+
+        var arr = dset.read_all[DType.float64]()
+        print(arr.get(0))      # 1-D indexing
+        print(arr.get(0, 1))   # 2-D indexing
+        arr.free()
 
     Note:
         1-D arrays: dim0 = n, dim1 = 0
@@ -100,7 +104,7 @@ struct NDArray[dtype: DType](Copyable, Movable):
     def __getitem__(self, row: Int, col: Int) -> Scalar[Self.dtype]:
         return self.data[row * self.dim1 + col]
 
-    fn get_element(self, i: Int) -> Scalar[Self.dtype]:
+    fn get(self, i: Int) -> Scalar[Self.dtype]:
         """Get element at index (for 1-D arrays).
 
         Args:
@@ -111,7 +115,7 @@ struct NDArray[dtype: DType](Copyable, Movable):
         """
         return self.data[i]
 
-    fn get_element(self, row: Int, col: Int) -> Scalar[Self.dtype]:
+    fn get(self, row: Int, col: Int) -> Scalar[Self.dtype]:
         """Get element at row, col (for 2-D arrays).
 
         Args:
@@ -143,12 +147,12 @@ struct AttributeManager:
     Attributes are user-defined metadata attached to HDF5 objects (groups or
     datasets). This class provides dict-like access to attributes.
 
-    Access via ``.attrs`` property on File, Group, or Dataset objects::
+    Access via ``.attrs()`` method on File, Group, or Dataset objects::
 
         var f = File("data.h5", "r")
-        var version = f.attrs["version"]  # read
-        f.attrs["created"] = 42           # write
-        f.delete("temp_attr")             # delete
+        var version = f.attrs().get[DType.int32]("version", Int32(0))  # read
+        f.attrs().set[DType.int32]("created", Int32(42))              # write
+        f.attrs().delete("temp_attr")                                # delete
     """
 
     var _loc_id: hid_t
@@ -379,7 +383,7 @@ struct Dataset(Copyable, Movable):
     Example::
 
         var f = File("data.h5", "r")
-        var obj = f["mydataset"]
+        var obj = f.get("mydataset")
         if obj.is_dataset():
             var dset = obj.dataset()
             print(dset.shape())   # [100, 50]
@@ -387,7 +391,7 @@ struct Dataset(Copyable, Movable):
             print(dset.ndim())    # 2
             print(dset.size())    # 5000
             var arr = dset.read_all[DType.float64]()
-            print(arr[0, 0])
+            print(arr.get(0, 0))
             arr.free()
         f.close()
     """
@@ -681,13 +685,13 @@ struct Group(Copyable, Movable):
     Example::
 
         var f = File("data.h5", "r")
-        var grp = f["mygroup"]
+        var grp = f.get("mygroup")
         if grp.is_group():
             var g = grp.group()
             for name in g.keys():
                 print(name)
             # Read a dataset within the group
-            var obj = g["data"]
+            var obj = g.get("data")
             if obj.is_dataset():
                 var dset = obj.dataset()
                 var arr = dset.read_all[DType.float64]()
@@ -1238,7 +1242,7 @@ struct Group(Copyable, Movable):
 struct H5Object(Copyable, Movable):
     """Polymorphic wrapper for HDF5 groups or datasets.
 
-    When accessing items from a Group or File using bracket notation,
+    When accessing items from a Group or File using get(),
     the result is an H5Object that can represent either a Group or Dataset.
     Use is_group() / is_dataset() to check the type, then unwrap with
     group() / dataset().
@@ -1246,7 +1250,7 @@ struct H5Object(Copyable, Movable):
     Example::
 
         var f = File("data.h5", "r")
-        var obj = f["path/to/item"]
+        var obj = f.get("path/to/item")
         if obj.is_dataset():
             var dset = obj.dataset()
             var arr = dset.read_all[DType.float64]()
@@ -1327,10 +1331,11 @@ struct File(Copyable, Movable):
     - "w-" or "x": Create, fails if file exists.
     - "a": Append (read/write), creates if doesn't exist.
 
-    Example
+    Example::
+
         # Reading
         var f = File("data.h5", "r")
-        var obj = f["mydataset"]
+        var obj = f.get("mydataset")
         if obj.is_dataset():
             var dset = obj.dataset()
             print(dset.shape())
