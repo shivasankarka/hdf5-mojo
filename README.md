@@ -144,7 +144,7 @@ example dataset.
 hdf5/
   __init__.mojo       # Package entry point
   ffi.mojo            # Low-level HDF5 C FFI wrapper (HDF5Lib)
-  h5py_api.mojo       # High-level h5py-compatible API
+  core.mojo       # High-level h5py-compatible API
 examples/
   demo_api.mojo       # h5py-style API demonstration
   sample_data.h5      # Sample HDF5 file

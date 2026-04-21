@@ -26,4 +26,4 @@ Example usage:
 For direct access to the HDF5 C API import ``hdf5.ffi`` instead.
 """
 
-from .h5py_api import File, Group, Dataset, AttributeManager, H5Object, NDArray
+from .core import File, Group, Dataset, AttributeManager, H5Object, NDArray
