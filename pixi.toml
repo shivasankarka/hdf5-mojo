@@ -4,6 +4,14 @@ channels = ["conda-forge", "https://conda.modular.com/max/"]
 name = "hdf5-mojo"
 platforms = ["osx-arm64", "linux-64"]
 version = "0.1.0"
+preview = ["pixi-build"]
+
+[package]
+name = "hdf5-mojo"
+version = "0.1.0"
+
+[package.build]
+backend = {name = "pixi-build-mojo", version = "0.*"}
 
 [tasks]
 format = "mojo format hdf5 && mojo format examples"
@@ -14,3 +22,4 @@ tests = "sh ./tests/tests.sh && rm ./tests/*.h5"
 [dependencies]
 mojo = ">=0.26.2.0,<0.27"
 hdf5 = ">=2.1.0,<3"
+numojo = { git = "https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo", branch = "main"}
