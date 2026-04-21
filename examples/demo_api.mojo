@@ -21,12 +21,12 @@
 #   - Opening a file for reading:  File(path, mode)
 #   - Reading scalar attributes:   group.attrs().read_scalar[dtype](name)
 #   - Reading datasets:            dset.read_all[dtype]()
-#   - NDArray shape and indexing:  .dim0, .dim1, .size(), arr[i], arr[row, col]
+#   - NDArray shape and indexing:  .dim0, .dim1, .size(), arr.get(i), arr.get(row, col)
 #   - Freeing heap buffers:        .free()
 #   - Creating a file for writing: File(path, "w")
 #   - Creating groups:             require_group(name)
-#   - Writing datasets:            create_dataset_with_data[dtype](name, shape, ptr)
-#   - Closing handles:             f.close()
+#   - Writing datasets:           create_dataset_with_data[dtype](name, shape, ptr)
+#   - Closing handles:            f.close()
 
 from hdf5 import File
 
@@ -41,7 +41,7 @@ def main() raises:
     # 2. Read scalar attributes
     # ===----------------------------------------------------------------------=== #
     # Attributes can be Float64 or Int32 (pass the matching dtype).
-    var meta_obj = f["/metadata"]
+    var meta_obj = f.get("/metadata")
     var meta = meta_obj.group()
     var num_days = meta.attrs().read_scalar[DType.int32]("num_days")
     var num_stations = meta.attrs().read_scalar[DType.int32]("num_stations")
@@ -59,7 +59,7 @@ def main() raises:
     # 3. Read a 1-D Float64 dataset
     # Shape is discovered automatically — no need to pass a size.
     # ===----------------------------------------------------------------------=== #
-    var elevation_obj = f["/sensors/elevation_m"]
+    var elevation_obj = f.get("/sensors/elevation_m")
     var elevation_dset = elevation_obj.dataset()
     var elevation = elevation_dset.read_all[DType.float64]()
     elevation_dset.close()
@@ -70,13 +70,13 @@ def main() raises:
     print("  total elements:", elevation.size())
     print("  values:", end="")
     for i in range(elevation.dim0):
-        print("", elevation[i], end="")
+        print("", elevation.get(i), end="")
     print()
 
     # ===----------------------------------------------------------------------=== #
     # 4. Read a 1-D Int32 dataset
     # ===----------------------------------------------------------------------=== #
-    var station_id_obj = f["/sensors/station_id"]
+    var station_id_obj = f.get("/sensors/station_id")
     var station_id_dset = station_id_obj.dataset()
     var station_id = station_id_dset.read_all[DType.int32]()
     station_id_dset.close()
@@ -84,14 +84,14 @@ def main() raises:
     print("\n=== 1-D Int32: /sensors/station_id ===")
     print("  values:", end="")
     for i in range(station_id.dim0):
-        print("", station_id[i], end="")
+        print("", station_id.get(i), end="")
     print()
 
     # ===----------------------------------------------------------------------=== #
     # 5. Read a 2-D Float64 dataset
     # arr[row, col] — row-major indexing.
     # ===----------------------------------------------------------------------=== #
-    var temp_obj = f["/observations/temperature_c"]
+    var temp_obj = f.get("/observations/temperature_c")
     var temp_dset = temp_obj.dataset()
     var temp = temp_dset.read_all[DType.float64]()
     temp_dset.close()
@@ -101,25 +101,25 @@ def main() raises:
     print("  total elements:", temp.size())
     print("  row 0 (day 1):", end="")
     for s in range(Int(num_stations)):
-        print("", temp[0, s], end="")
+        print("", temp.get(0, s), end="")
     print()
     print("  col 0 (station 1, first 5 days):", end="")
     for d in range(5):
-        print("", temp[d, 0], end="")
+        print("", temp.get(d, 0), end="")
     print()
 
     # ===----------------------------------------------------------------------=== #
     # 6. Read a 2-D Float32 dataset
     # ===----------------------------------------------------------------------=== #
-    var humidity_obj = f["/observations/humidity_pct"]
+    var humidity_obj = f.get("/observations/humidity_pct")
     var humidity_dset = humidity_obj.dataset()
     var humidity = humidity_dset.read_all[DType.float32]()
     humidity_dset.close()
 
     print("\n=== 2-D Float32: /observations/humidity_pct ===")
     print("  shape:", humidity.dim0, "×", humidity.dim1)
-    print("  humidity[0, 0] =", humidity[0, 0], "%")
-    print("  humidity[14,2] =", humidity[14, 2], "%")
+    print("  humidity[0, 0] =", humidity.get(0, 0), "%")
+    print("  humidity[14,2] =", humidity.get(14, 2), "%")
 
     # ===----------------------------------------------------------------------=== #
     # 7. Free all read buffers
@@ -190,28 +190,28 @@ def main() raises:
     # ===----------------------------------------------------------------------=== #
     var r = File("./examples/demo_output.h5", "r")
 
-    var summary_obj = r["/summary"]
+    var summary_obj = r.get("/summary")
     var summary_r = summary_obj.group()
 
-    var mean_obj = summary_r["mean_temp_c"]
+    var mean_obj = summary_r.get("mean_temp_c")
     var mean_dset = mean_obj.dataset()
     var mean_back = mean_dset.read_all[DType.float64]()
     mean_dset.close()
     print("\n=== Round-trip read ===")
     print("  mean_temp_c:", end="")
     for i in range(mean_back.dim0):
-        print("", mean_back[i], end="")
+        print("", mean_back.get(i), end="")
     print()
 
-    var daily_obj = summary_r["daily"]
+    var daily_obj = summary_r.get("daily")
     var daily_r = daily_obj.group()
 
-    var exc_obj = daily_r["temp_excerpt"]
+    var exc_obj = daily_r.get("temp_excerpt")
     var exc_dset = exc_obj.dataset()
     var exc_back = exc_dset.read_all[DType.float64]()
     exc_dset.close()
     print("  temp_excerpt shape:", exc_back.dim0, "×", exc_back.dim1)
-    print("  exc_back[1, 2] =", exc_back[1, 2], " (expected 12.0)")
+    print("  exc_back[1, 2] =", exc_back.get(1, 2), " (expected 12.0)")
 
     mean_back.free()
     exc_back.free()

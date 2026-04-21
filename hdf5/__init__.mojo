@@ -7,25 +7,23 @@
 hdf5 package
 ============
 
-High-level HDF5 file I/O for Mojo.
+High-level HDF5 file I/O for Mojo with h5py-compatible API.
 
-Re-exports the two primary public types from `hdf5.core`:
-
-- `H5File`        — open, read, write, and close HDF5 files.
-- `NDArray[dtype]` — heap-allocated typed array returned by read methods.
-
-Typical usage:
+Example usage:
     ```mojo
-    from hdf5 import H5File
+    from hdf5 import File
 
-    var f   = H5File("data.h5")
-    var arr = f.read_1d[DType.float64]("/group/dataset")
-    print(arr[0])
-    arr.free()
+    var f = File("data.h5", "r")
+    var obj = f["mydataset"]
+    if obj.is_dataset():
+        var dset = obj.dataset()
+        print(dset.shape(), dset.dtype())
+    for name in f.keys():
+        print(name)
     f.close()
     ```
 
-For direct access to the HDF5 C API import `hdf5.ffi` instead.
+For direct access to the HDF5 C API import ``hdf5.ffi`` instead.
 """
 
-from .core import H5File, NDArray
+from .h5py_api import File, Group, Dataset, AttributeManager, H5Object, NDArray
