@@ -1,34 +1,21 @@
 # hdf5-mojo
 
-High-level HDF5 bindings for Mojo: Read and write HDF5 files using a clean, ergonomic API that wraps the HDF5 C library.
-
-## Motivation
-I'm currently porting several scientific-computation libraries to Mojo for my own research. HDF5 is widely used in my field and is a big dependency of one of the projects I'm porting (look out for that one :)). So I decided to write bindings for it.
-
-They work for now, but are still pretty rough. I have lots of ideas to improve the API and make it feel more like Python's `h5py` so that it's more polished and user-friendly.
+High-level HDF5 bindings for Mojo: Read and write HDF5 files using an h5py-compatible API that wraps the HDF5 C library.
 
 ## Overview
 
-The library is split into two layers:
+I'm working on porting some particle physics simulation libraries to Mojo. Since HDF5 is widely used there, I wrote these bindings to make it easier to use HDF5 datasets directly from Mojo!
 
-| Layer | File | Purpose |
-|-------|------|---------|
-| Low-level | `hdf5/bindings.mojo` | Thin FFI wrapper around the HDF5 C library (`HDF5Lib`) |
-| High-level | `hdf5/api.mojo` | Ergonomic Mojo-friendly API (`H5File`, `NDArray`) |
-
-For most use cases, only the high-level API is needed.
+It has most of the basic features needed for working with datasets (and for my current projects :) ). Full HDF5 feature parity might come later if I get more free time.
 
 ## Features
 
-- Read 1-D and 2-D datasets without knowing sizes ahead of time — shapes are discovered automatically.
-- Read scalar attributes from groups or datasets.
-- Create files and write 1-D and 2-D datasets (row-major).
-- `require_group` helper to create nested groups safely.
-- Automatic HDF5 library discovery via `$CONDA_PREFIX` (set by pixi), with optional explicit path override.
-
-## Ongoing work
-- Align the current API with `h5py` library and make it more user friendly. 
-- Add `NuMojo` backend for all array operations so that users can manipulate data with access to much richer features. 
+- Read/write HDF5 files with h5py-style API
+- Create groups, datasets, and attributes
+- Support for `float64`, `float32`, `int32`, `int64` dtypes
+- 1-D and 2-D dataset reading with `read_all[dtype]()`
+- `require_group` / `require_dataset` helpers
+- Automatic library discovery via pixi
 
 ## Supported DType mappings
 
@@ -84,142 +71,105 @@ pixi install
 ### Reading a file
 
 ```mojo
-from hdf5 import H5File
+from hdf5 import File
 
 def main() raises:
-    var f = H5File("data.h5")
+    var f = File("data.h5", "r")
 
-    # Read scalar attributes
-    var emin   = f.read_scalar_attr[DType.float64]("/group", "min_energy")
-    var nnodes = f.read_scalar_attr[DType.int32]("/group", "number_energy_nodes")
+    # Access datasets and groups with .get() method
+    var obj = f.get("group/dataset")
+    if obj.is_dataset():
+        var dset = obj.dataset()
+        print(dset.shape())   # [100, 50]
+        print(dset.dtype())   # "float64"
+        
+        # Read all data into an NDArray
+        var arr = dset.read_all[DType.float64]()
+        print(arr[0, 0])
+        arr.free()
 
-    # Read 1-D and 2-D datasets (sizes discovered automatically)
-    var xs  = f.read_1d[DType.float64]("/group/dataset")
-    var mat = f.read_2d[DType.float64]("/group/matrix")
+    # Iterate over root-level items
+    for name in f.keys():
+        print(name)
 
-    print(xs[0], mat[0, 0])
+    # Read attributes
+    var version = f.attrs().get[DType.int32]("version", Int32(0))
 
-    xs.free()
-    mat.free()
     f.close()
 ```
 
 ### Writing a file
 
 ```mojo
-from hdf5 import H5File
+from hdf5 import File
+from std.memory import UnsafePointer, alloc
 
 def main() raises:
-    var f = H5File.create("out.h5")
+    var f = File("output.h5", "w")
 
-    f.require_group("/results")
-    f.write_1d[DType.float64]("/results/energies", ptr, n)
-    f.write_2d[DType.float64]("/results/matrix",   ptr, rows, cols)
+    # Create groups (nested paths are automatically created)
+    f.create_group("results/nested")
+
+    # Create datasets
+    var shape = List[Int](100, 50)
+    var dset = f.create_dataset[DType.float64]("results/data", shape)
+
+    # Write data
+    var n = 100 * 50
+    var buf = alloc[Scalar[DType.float64]](n)
+    # ... fill buf with data ...
+    dset.write[DType.float64](buf, n)
+    buf.free()
+
+    # Write attributes
+    f.attrs().set[DType.int32]("version", Int32(1))
 
     f.close()
 ```
 
 ## API Reference
 
-### `H5File`
-
-**Constructors**
-
-| Method | Description |
-|--------|-------------|
-| `H5File(path)` | Open an existing file read-only. Library auto-detected from `$CONDA_PREFIX`. |
-| `H5File(path, lib_path)` | Open read-only with an explicit HDF5 library path. |
-| `H5File.create(path)` | Create a new file for writing. |
-| `H5File.create(path, lib_path)` | Create with an explicit library path. |
-
-**Reading**
-
-| Method | Description |
-|--------|-------------|
-| `read_1d[dtype](path) -> NDArray[dtype]` | Read a 1-D dataset. Shape is discovered automatically. |
-| `read_2d[dtype](path) -> NDArray[dtype]` | Read a 2-D dataset. Shape is discovered automatically. |
-| `read_scalar_attr[dtype](loc_path, attr_name) -> Scalar[dtype]` | Read a scalar attribute from a group or dataset. |
-
-**Writing**
-
-| Method | Description |
-|--------|-------------|
-| `write_1d[dtype](path, data_ptr, n)` | Create and write a 1-D dataset. |
-| `write_2d[dtype](path, data_ptr, rows, cols)` | Create and write a 2-D dataset (row-major). |
-| `require_group(name)` | Create a group if it does not already exist. |
-
-**Closing**
-
-| Method | Description |
-|--------|-------------|
-| `close()` | Flush pending writes and close the file. |
+See [docs/api_reference.md](docs/api_reference.md) for the complete API documentation.
 
 ---
 
-### `NDArray[dtype: DType]`
-
-A heap-allocated, shaped array returned by read methods.
-
-| Field / Method | Description |
-|----------------|-------------|
-| `data` | Raw pointer to the heap buffer. |
-| `dim0` | Size of the first dimension. |
-| `dim1` | Size of the second dimension (1-D arrays: `0`). |
-| `arr[i]` | Index into a 1-D array. |
-| `arr[row, col]` | Index into a 2-D array (row-major). |
-| `.size()` | Total number of elements (`dim0 * max(dim1, 1)`). |
-| `.free()` | Release the underlying heap buffer. |
-
-> **Note:** `NDArray` will be replaced in a future release by the `NDArray` type from [NuMojo](https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo), which provides a richer numerical array interface.
-
-## Important notes
-
-- Always call `.free()` on any `NDArray` returned by read methods to avoid memory leaks.
-- Always call `.close()` on `H5File` to flush writes and close the file handle.
-- Datasets must not already exist when calling `write_1d` / `write_2d`. Use `require_group` to create parent groups first.
-- The library defaults to `$CONDA_PREFIX/lib/libhdf5.dylib` (set by pixi). Pass an explicit `lib_path` when the library is located elsewhere.
-
 ## Examples
 
-The `examples/` directory contains two programs that read `sample_data.h5`, a small bundled HDF5 file with a structure similar to real neutrino cross-section data:
-
-| File | Description |
-|------|-------------|
-| `examples/read_sample_api.mojo` | High-level `H5File` API — the recommended approach. |
-| `examples/read_sample_bindings.mojo` | Low-level `HDF5Lib` bindings — for cases needing direct C-API control. |
+See `examples/demo_api.mojo` for a complete example demonstrating the h5py-style API with an 
+example dataset. 
 
 ## Project structure
 
 ```
 hdf5/
   __init__.mojo       # Package entry point
-  bindings.mojo       # Low-level HDF5 C FFI wrapper (HDF5Lib)
-  api.mojo            # High-level API (H5File, NDArray)
+  ffi.mojo            # Low-level HDF5 C FFI wrapper (HDF5Lib)
+  h5py_api.mojo       # High-level h5py-compatible API
 examples/
-  sample_data.h5              # Bundled sample HDF5 file
-  read_sample_api.mojo        # High-level API example
-  read_sample_bindings.mojo   # Low-level bindings example
+  demo_api.mojo       # h5py-style API demonstration
+  sample_data.h5      # Sample HDF5 file
 ```
 
 ## Troubleshooting
 
-**File fails to open** — Ensure `libhdf5.dylib` is accessible. If using pixi, run `pixi install` first so `$CONDA_PREFIX` is set. Otherwise pass an explicit `lib_path` to the constructor.
+**File fails to open** — Ensure `libhdf5.dylib` is accessible. If using pixi, run `pixi install` first so `$CONDA_PREFIX` is set.
+
+**Memory leak warnings** — Call `.free()` on every `NDArray` returned by read methods and `.close()` on `File` when done.
 
 **"dataset already exists" on write** — The write helpers refuse to overwrite existing datasets. Choose a new path or recreate the file.
-
-**Memory leak warnings** — Call `.free()` on every `NDArray` returned by read methods and `.close()` on `H5File` when done.
 
 ## License
 
 Distributed under the Apache 2.0 License. See `LICENSE` for details.
 
 ## Acknowledgement
+
 Huge thanks to the HDF5 maintainers, this cool library exists thanks to their work :)
 
 ## Contributing
 
-Contributions are always welcome! Please follow the repository contribution guidelines and include tests or examples where appropriate.
+Contributions are always welcome! If you think there's a feature missing, make an issue or give it a try and make a PR! 
 
 ## Contact
 
-For questions or bug reports, open an issue in the repository.
+For questions or bug reports, please open an issue in the repository.
