@@ -9,6 +9,7 @@ version = "0.1.0"
 format = "mojo format hdf5 && mojo format examples"
 package = "mojo package hdf5"
 demo = "mojo package hdf5 && mojo run -I ./ -I ./examples examples/demo_api.mojo"
+tests = "sh ./tests/tests.sh && rm ./tests/*.h5"
 
 [dependencies]
 mojo = ">=0.26.2.0,<0.27"
