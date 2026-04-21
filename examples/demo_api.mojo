@@ -29,6 +29,7 @@
 #   - Closing handles:            f.close()
 
 from hdf5 import File
+from numojo.prelude import NDArray
 
 
 def main() raises:
@@ -65,12 +66,11 @@ def main() raises:
     elevation_dset.close()
 
     print("\n=== 1-D Float64: /sensors/elevation_m ===")
-    print("  length (dim0) =", elevation.dim0)
-    print("  dim1          =", elevation.dim1, "  (always 1 for 1-D arrays)")
-    print("  total elements:", elevation.size())
+    print("  length (dim0) =", elevation.shape)
+    print("  total elements:", elevation.size)
     print("  values:", end="")
-    for i in range(elevation.dim0):
-        print("", elevation.get(i), end="")
+    for i in range(elevation.shape[0]):
+        print("", elevation.item(i), end="")
     print()
 
     # ===----------------------------------------------------------------------=== #
@@ -83,8 +83,8 @@ def main() raises:
 
     print("\n=== 1-D Int32: /sensors/station_id ===")
     print("  values:", end="")
-    for i in range(station_id.dim0):
-        print("", station_id.get(i), end="")
+    for i in range(station_id.shape[0]):
+        print("", station_id.item(i), end="")
     print()
 
     # ===----------------------------------------------------------------------=== #
@@ -97,15 +97,15 @@ def main() raises:
     temp_dset.close()
 
     print("\n=== 2-D Float64: /observations/temperature_c ===")
-    print("  shape:", temp.dim0, "×", temp.dim1, " (days × stations)")
-    print("  total elements:", temp.size())
+    print("  shape:", temp.shape[0], "×", temp.shape[1], " (days × stations)")
+    print("  total elements:", temp.size)
     print("  row 0 (day 1):", end="")
     for s in range(Int(num_stations)):
-        print("", temp.get(0, s), end="")
+        print("", temp.item(0, s), end="")
     print()
     print("  col 0 (station 1, first 5 days):", end="")
     for d in range(5):
-        print("", temp.get(d, 0), end="")
+        print("", temp.item(d, 0), end="")
     print()
 
     # ===----------------------------------------------------------------------=== #
@@ -117,18 +117,13 @@ def main() raises:
     humidity_dset.close()
 
     print("\n=== 2-D Float32: /observations/humidity_pct ===")
-    print("  shape:", humidity.dim0, "×", humidity.dim1)
-    print("  humidity[0, 0] =", humidity.get(0, 0), "%")
-    print("  humidity[14,2] =", humidity.get(14, 2), "%")
+    print("  shape:", humidity.shape[0], "×", humidity.shape[1])
+    print("  humidity[0, 0] =", humidity.item(0, 0), "%")
+    print("  humidity[14,2] =", humidity.item(14, 2), "%")
 
     # ===----------------------------------------------------------------------=== #
-    # 7. Free all read buffers
+    # 7. Free file buffer
     # ===----------------------------------------------------------------------=== #
-    elevation.free()
-    station_id.free()
-    temp.free()
-    humidity.free()
-
     f.close()
 
     # ===----------------------------------------------------------------------=== #
@@ -199,8 +194,8 @@ def main() raises:
     mean_dset.close()
     print("\n=== Round-trip read ===")
     print("  mean_temp_c:", end="")
-    for i in range(mean_back.dim0):
-        print("", mean_back.get(i), end="")
+    for i in range(mean_back.shape[0]):
+        print("", mean_back.item(i), end="")
     print()
 
     var daily_obj = summary_r.get("daily")
@@ -210,11 +205,9 @@ def main() raises:
     var exc_dset = exc_obj.dataset()
     var exc_back = exc_dset.read_all[DType.float64]()
     exc_dset.close()
-    print("  temp_excerpt shape:", exc_back.dim0, "×", exc_back.dim1)
-    print("  exc_back[1, 2] =", exc_back.get(1, 2), " (expected 12.0)")
+    print("  temp_excerpt shape:", exc_back.shape[0], "×", exc_back.shape[1])
+    print("  exc_back[1, 2] =", exc_back.item(1, 2), " (expected 12.0)")
 
-    mean_back.free()
-    exc_back.free()
     daily_r.close()
     summary_r.close()
     r.close()

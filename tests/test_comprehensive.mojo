@@ -1,5 +1,6 @@
 from std.memory import UnsafePointer, alloc
 from std.testing import TestSuite, assert_true, assert_equal
+from numojo import Item
 
 from hdf5 import File
 
@@ -254,12 +255,11 @@ def test_dataset_read_write() raises:
     var obj = f2.get("data")
     var ds = obj.dataset()
     var arr = ds.read_all[DType.float64]()
-    assert_equal(arr.get(0), 1.0, "first value should be 1.0")
-    assert_equal(arr.get(1), 2.0, "second value should be 2.0")
-    assert_equal(arr.get(2), 3.0, "third value should be 3.0")
-    assert_equal(arr.get(3), 4.0, "fourth value should be 4.0")
-    assert_equal(arr.get(4), 5.0, "fifth value should be 5.0")
-    arr.free()
+    assert_equal(arr[Item(0)], 1.0, "first value should be 1.0")
+    assert_equal(arr[Item(1)], 2.0, "second value should be 2.0")
+    assert_equal(arr[Item(2)], 3.0, "third value should be 3.0")
+    assert_equal(arr[Item(3)], 4.0, "fourth value should be 4.0")
+    assert_equal(arr[Item(4)], 5.0, "fifth value should be 5.0")
     ds.close()
     f2.close()
 
