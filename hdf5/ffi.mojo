@@ -859,18 +859,20 @@ struct HDF5Lib(Movable):
         """
         var buf_size: Int = 256
         var buf = alloc[c_char](buf_size)
-        # var dot = String(".\0")
-        # var name_len = self.handle.call["H5Aget_name_by_idx", c_ssize_t](
-        #     loc_id,
-        #     dot.unsafe_ptr().bitcast[c_char](),
-        #     c_int(0),
-        #     c_int(0),
-        #     hsize_t(idx),
-        #     buf,
-        #     c_ulong_long(buf_size),
-        #     H5P_DEFAULT,
-        # )
-        var result = String(buf)
+        var dot = String(".\0")
+        var name_len = self.handle.call["H5Aget_name_by_idx", c_ssize_t](
+            loc_id,
+            dot.unsafe_ptr().bitcast[c_char](),
+            c_int(0),
+            c_int(0),
+            hsize_t(idx),
+            buf,
+            c_ulong_long(buf_size),
+            H5P_DEFAULT,
+        )
+        var result = ""
+        if name_len > 0:
+            result = String(unsafe_from_utf8=Span[Byte](ptr=buf.bitcast[UInt8](), length=Int(name_len)))
         buf.free()
         return result
 
@@ -918,7 +920,7 @@ struct HDF5Lib(Movable):
 
     def get_chunk_dims(
         self, dcpl: hid_t, ndims: Int
-    ) -> UnsafePointer[hsize_t, MutExt]:
+    ) -> Int:
         """Call ``H5Pget_chunk`` to get chunk dimensions.
 
         Args:
@@ -926,12 +928,12 @@ struct HDF5Lib(Movable):
             ndims: Number of dimensions.
 
         Returns:
-            A heap-allocated array of chunk dimensions, or zeros if not chunked.
-            Caller must call `.free()` on the result.
+            Number of chunk dimensions, or 0 if not chunked.
         """
         var dims = alloc[hsize_t](ndims)
-        _ = self.handle.call["H5Pget_chunk", c_int](dcpl, c_int(ndims), dims)
-        return dims
+        var rc = self.handle.call["H5Pget_chunk", c_int](dcpl, c_int(ndims), dims)
+        dims.free()
+        return Int(rc)
 
     def resize_dataset(self, did: hid_t, size: hsize_t) -> herr_t:
         """Call ``H5Dset_extent`` to resize a dataset along axis 0.
@@ -977,7 +979,7 @@ struct HDF5Lib(Movable):
         var len = self.handle.call["H5Fget_name", c_int](fid, buf)
         var result = ""
         if len > 0:
-            result = String(buf)
+            result = String(unsafe_from_utf8=Span[Byte](ptr=buf.bitcast[UInt8](), length=Int(len)))
         buf.free()
         return result
 
