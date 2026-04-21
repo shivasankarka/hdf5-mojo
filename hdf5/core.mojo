@@ -31,6 +31,7 @@ from hdf5.ffi import (
 )
 from std.memory import UnsafePointer
 from std.utils import Variant
+from numojo import NDArray, Item, Shape
 
 comptime MutExt = MutExternalOrigin
 
@@ -53,87 +54,6 @@ def _hdf5_type_id[dtype: DType](lib: HDF5Lib) -> hid_t:
         return lib.handle.get_symbol[hid_t]("H5T_NATIVE_INT64_g")[]
     else:
         return lib.native_double
-
-
-# ===----------------------------------------------------------------------=== #
-# NDArray
-# ===----------------------------------------------------------------------=== #
-# TODO: replace with numojo
-struct NDArray[dtype: DType](Copyable, Movable):
-    """Heap-allocated shaped array for dataset reads.
-
-    Wraps a heap buffer with shape information for 1-D and 2-D arrays.
-    Call `.free()` when done to release memory.
-
-    Example::
-
-        var arr = dset.read_all[DType.float64]()
-        print(arr.get(0))      # 1-D indexing
-        print(arr.get(0, 1))   # 2-D indexing
-        arr.free()
-
-    Note:
-        1-D arrays: dim0 = n, dim1 = 0
-        2-D arrays: dim0 = rows, dim1 = cols
-    """
-
-    var data: UnsafePointer[Scalar[Self.dtype], MutExt]
-    var dim0: Int
-    var dim1: Int
-
-    def __init__(
-        out self, data: UnsafePointer[Scalar[Self.dtype], MutExt], n: Int
-    ):
-        self.data = data
-        self.dim0 = n
-        self.dim1 = 0
-
-    def __init__(
-        out self,
-        data: UnsafePointer[Scalar[Self.dtype], MutExt],
-        rows: Int,
-        cols: Int,
-    ):
-        self.data = data
-        self.dim0 = rows
-        self.dim1 = cols
-
-    def __getitem__(self, i: Int) -> Scalar[Self.dtype]:
-        return self.data[i]
-
-    def __getitem__(self, row: Int, col: Int) -> Scalar[Self.dtype]:
-        return self.data[row * self.dim1 + col]
-
-    fn get(self, i: Int) -> Scalar[Self.dtype]:
-        """Get element at index (for 1-D arrays).
-
-        Args:
-            i: Index of the element.
-
-        Returns:
-            The element at index i.
-        """
-        return self.data[i]
-
-    fn get(self, row: Int, col: Int) -> Scalar[Self.dtype]:
-        """Get element at row, col (for 2-D arrays).
-
-        Args:
-            row: Row index.
-            col: Column index.
-
-        Returns:
-            The element at [row, col].
-        """
-        return self.data[row * self.dim1 + col]
-
-    def size(self) -> Int:
-        if self.dim1 > 0:
-            return self.dim0 * self.dim1
-        return self.dim0
-
-    def free(self):
-        self.data.free()
 
 
 # ===----------------------------------------------------------------------=== #
@@ -601,10 +521,10 @@ struct Dataset(Copyable, Movable):
     def read_all[dtype: DType](self) raises -> NDArray[dtype]:
         """Read the entire dataset into an NDArray.
 
-        Supports 1-D and 2-D datasets. Call .free() on the returned
-        array when done.
+        Uses NuMojo NDArray for heap-allocated array storage.
+        Use Item() for indexing: arr[Item(i, j)] for 2D, arr[Item(i)] for 1D.
 
-        Paramters:
+        Parameters:
             dtype: The data type to read as (e.g., DType.float64, DType.int32).
 
         Returns:
@@ -616,29 +536,29 @@ struct Dataset(Copyable, Movable):
         var nd = len(self._shape)
         if nd == 1:
             var n = self._shape[0]
-            var buf = alloc[Scalar[dtype]](n)
+            var arr = NDArray[dtype](Shape(n))
+            var ptr = arr.unsafe_ptr().bitcast[Scalar[dtype]]()
             var rc = self._lib[].read_dataset(
                 self._did,
                 _hdf5_type_id[dtype](self._lib[]),
-                buf.bitcast[NoneType](),
+                ptr.bitcast[NoneType](),
             )
             if rc < 0:
-                buf.free()
                 raise Error("Dataset: H5Dread failed for '" + self._name + "'")
-            return NDArray[dtype](buf, n)
+            return arr^
         elif nd == 2:
             var rows = self._shape[0]
             var cols = self._shape[1]
-            var buf = alloc[Scalar[dtype]](rows * cols)
+            var arr = NDArray[dtype](Shape(rows, cols))
+            var ptr = arr.unsafe_ptr().bitcast[Scalar[dtype]]()
             var rc = self._lib[].read_dataset(
                 self._did,
                 _hdf5_type_id[dtype](self._lib[]),
-                buf.bitcast[NoneType](),
+                ptr.bitcast[NoneType](),
             )
             if rc < 0:
-                buf.free()
                 raise Error("Dataset: H5Dread failed for '" + self._name + "'")
-            return NDArray[dtype](buf, rows, cols)
+            return arr^
         else:
             raise Error("Dataset: unsupported rank for '" + self._name + "'")
 
@@ -660,6 +580,28 @@ struct Dataset(Copyable, Movable):
             self._did,
             _hdf5_type_id[dtype](self._lib[]),
             data.bitcast[NoneType](),
+        )
+        if rc < 0:
+            raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
+
+    def write_all[dtype: DType](self, data: NDArray[dtype]) raises:
+        """Write entire NDArray contents to the dataset.
+
+        Parameters:
+            dtype: The data type to write as (e.g., DType.float64, DType.int32).
+
+        Args:
+            data: NuMojo NDArray containing the data to write.
+
+        Raises:
+            Error: If the write operation fails.
+        """
+        var total = data.size
+        var ptr = data.unsafe_ptr()
+        var rc = self._lib[].write_dataset(
+            self._did,
+            _hdf5_type_id[dtype](self._lib[]),
+            ptr.bitcast[NoneType](),
         )
         if rc < 0:
             raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
@@ -919,7 +861,9 @@ struct Group(Copyable, Movable):
                 buf.free()
                 break
             var n = Int(name_len)
-            var member_name = String(unsafe_from_utf8=Span[Byte](ptr=buf.bitcast[UInt8](), length=n))
+            var member_name = String(
+                unsafe_from_utf8=Span[Byte](ptr=buf.bitcast[UInt8](), length=n)
+            )
             buf.free()
             result.append(member_name)
             idx += 1
@@ -1168,6 +1112,35 @@ struct Group(Copyable, Movable):
         for d in shp:
             total *= d
         dset.write[dtype](data, total)
+        return dset^
+
+    def create_dataset_with_data[
+        dtype: DType
+    ](self, name: String, data: NDArray[dtype],) raises -> Dataset:
+        """Create a dataset and write data from NuMojo NDArray.
+
+        Parameters:
+            dtype: The data type for the dataset (e.g., DType.float64, DType.int32).
+
+        Args:
+            name: Name of the dataset to create.
+            data: NuMojo NDArray containing the data.
+
+        Returns:
+            The created Dataset object with data written.
+
+        Raises:
+            Error: If creation or writing fails.
+        """
+        var shape = List[Int]()
+        var shp = data.shape
+        if shp.ndim == 1:
+            shape.append(shp[0])
+        elif shp.ndim == 2:
+            shape.append(shp[0])
+            shape.append(shp[1])
+        var dset = self.create_dataset[dtype](name, shape)
+        dset.write_all[dtype](data)
         return dset^
 
     def require_dataset[
@@ -1602,17 +1575,17 @@ struct File(Copyable, Movable):
         var root = Group(self._lib, self._fid, "/", is_file=True)
         return root.require_group(name)
 
-    def require_dataset[dtype: DType](
-        self,
-        name: String,
-        shape: List[Int],
-    ) raises -> Dataset:
+    def require_dataset[
+        dtype: DType
+    ](self, name: String, shape: List[Int],) raises -> Dataset:
         """Open an existing dataset or create a new one if it doesn't exist.
+
+        Parameters:
+            dtype: The datatype for the dataset (e.g., DType.float64, DType.int32).
 
         Args:
             name: Name of the dataset.
             shape: Shape for the new dataset if created.
-            dtype: The Mojo DType for the dataset.
 
         Returns:
             The Dataset object (existing or newly created).
