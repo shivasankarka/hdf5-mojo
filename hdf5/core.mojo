@@ -4,7 +4,7 @@
 # See LICENSE for more information.
 # ===----------------------------------------------------------------------=== #
 """
-h5py-compatible API (`hdf5.h5py_api`)
+Core HDF5 API (`hdf5.core`)
 =====================================
 
 Provides an API that mirrors the Python ``h5py`` library as closely as possible.
