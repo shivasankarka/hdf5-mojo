@@ -30,6 +30,7 @@ from hdf5.ffi import (
     H5T_FLOAT,
 )
 from std.memory import UnsafePointer
+from std.utils import Variant
 
 comptime MutExt = MutExternalOrigin
 
@@ -38,8 +39,9 @@ comptime MutExt = MutExternalOrigin
 # DType <-> HDF5 type mapping
 # ===----------------------------------------------------------------------=== #
 
+
 # NOTE: Perhaps we should raises here, otherwise there'll be UB.
-fn _hdf5_type_id[dtype: DType](lib: HDF5Lib) -> hid_t:
+def _hdf5_type_id[dtype: DType](lib: HDF5Lib) -> hid_t:
     """Map a Mojo DType to the matching HDF5 predefined type id."""
     comptime if dtype == DType.float64:
         return lib.native_double
@@ -57,7 +59,7 @@ fn _hdf5_type_id[dtype: DType](lib: HDF5Lib) -> hid_t:
 # NDArray
 # ===----------------------------------------------------------------------=== #
 # TODO: replace with numojo
-struct NDArray[dtype: DType](Movable):
+struct NDArray[dtype: DType](Copyable, Movable):
     """Heap-allocated shaped array for dataset reads.
 
     Wraps a heap buffer with shape information for 1-D and 2-D arrays.
@@ -75,34 +77,65 @@ struct NDArray[dtype: DType](Movable):
     var dim0: Int
     var dim1: Int
 
-    fn __init__(out self, data: UnsafePointer[Scalar[Self.dtype], MutExt], n: Int):
+    def __init__(
+        out self, data: UnsafePointer[Scalar[Self.dtype], MutExt], n: Int
+    ):
         self.data = data
         self.dim0 = n
         self.dim1 = 0
 
-    fn __init__(out self, data: UnsafePointer[Scalar[Self.dtype], MutExt], rows: Int, cols: Int):
+    def __init__(
+        out self,
+        data: UnsafePointer[Scalar[Self.dtype], MutExt],
+        rows: Int,
+        cols: Int,
+    ):
         self.data = data
         self.dim0 = rows
         self.dim1 = cols
 
-    fn __getitem__(self, i: Int) -> Scalar[Self.dtype]:
+    def __getitem__(self, i: Int) -> Scalar[Self.dtype]:
         return self.data[i]
 
-    fn __getitem__(self, row: Int, col: Int) -> Scalar[Self.dtype]:
+    def __getitem__(self, row: Int, col: Int) -> Scalar[Self.dtype]:
         return self.data[row * self.dim1 + col]
 
-    fn size(self) -> Int:
+    fn get_element(self, i: Int) -> Scalar[Self.dtype]:
+        """Get element at index (for 1-D arrays).
+
+        Args:
+            i: Index of the element.
+
+        Returns:
+            The element at index i.
+        """
+        return self.data[i]
+
+    fn get_element(self, row: Int, col: Int) -> Scalar[Self.dtype]:
+        """Get element at row, col (for 2-D arrays).
+
+        Args:
+            row: Row index.
+            col: Column index.
+
+        Returns:
+            The element at [row, col].
+        """
+        return self.data[row * self.dim1 + col]
+
+    def size(self) -> Int:
         if self.dim1 > 0:
             return self.dim0 * self.dim1
         return self.dim0
 
-    fn free(self):
+    def free(self):
         self.data.free()
 
 
 # ===----------------------------------------------------------------------=== #
 # AttributeManager
 # ===----------------------------------------------------------------------=== #
+
 
 struct AttributeManager:
     """Dict-like proxy for HDF5 attributes on a Group or Dataset.
@@ -121,11 +154,11 @@ struct AttributeManager:
     var _loc_id: hid_t
     var _lib: UnsafePointer[HDF5Lib, MutExt]
 
-    fn __init__(out self, lib: UnsafePointer[HDF5Lib, MutExt], loc_id: hid_t):
+    def __init__(out self, lib: UnsafePointer[HDF5Lib, MutExt], loc_id: hid_t):
         self._loc_id = loc_id
         self._lib = lib
 
-    fn __contains__(self, name: String) -> Bool:
+    def __contains__(self, name: String) -> Bool:
         """Check if an attribute exists.
 
         Args:
@@ -140,7 +173,7 @@ struct AttributeManager:
             return True
         return False
 
-    fn __getitem__[dtype: DType](self, name: String) raises -> Scalar[dtype]:
+    def __getitem__[dtype: DType](self, name: String) raises -> Scalar[dtype]:
         """Read a scalar attribute value.
 
         Parameters:
@@ -157,7 +190,9 @@ struct AttributeManager:
         """
         return self.read_scalar[dtype](name)
 
-    fn __setitem__[dtype: DType](self, name: String, value: Scalar[dtype]) raises:
+    def __setitem__[
+        dtype: DType
+    ](mut self, name: String, value: Scalar[dtype]) raises:
         """Write a scalar attribute value.
 
         Parameters:
@@ -172,7 +207,33 @@ struct AttributeManager:
         """
         self.write_scalar[dtype](name, value)
 
-    fn read_scalar[dtype: DType](self, name: String) raises -> Scalar[dtype]:
+    fn contains(self, name: String) -> Bool:
+        """Check if an attribute exists.
+
+        Args:
+            name: Name of the attribute.
+
+        Returns:
+            True if the attribute exists, False otherwise.
+        """
+        return self.__contains__(name)
+
+    fn set[dtype: DType](self, name: String, value: Scalar[dtype]) raises:
+        """Write a scalar attribute value.
+
+        Parameters:
+            dtype: The data type (e.g., DType.float64, DType.int32).
+
+        Args:
+            name: Name of the attribute to write.
+            value: The value to write.
+
+        Raises:
+            Error: If writing fails.
+        """
+        self.write_scalar[dtype](name, value)
+
+    def read_scalar[dtype: DType](self, name: String) raises -> Scalar[dtype]:
         """Read a scalar attribute value.
 
         Parameters:
@@ -202,7 +263,9 @@ struct AttributeManager:
         buf.free()
         return v
 
-    fn write_scalar[dtype: DType](self, name: String, value: Scalar[dtype]) raises:
+    def write_scalar[
+        dtype: DType
+    ](self, name: String, value: Scalar[dtype]) raises:
         """Write a scalar attribute value.
 
         Parameters:
@@ -232,7 +295,7 @@ struct AttributeManager:
         if rc < 0:
             raise Error("attrs: write failed for '" + name + "'")
 
-    fn delete(self, name: String) raises:
+    def delete(self, name: String) raises:
         """Delete an attribute.
 
         Args:
@@ -245,7 +308,7 @@ struct AttributeManager:
         if rc < 0:
             raise Error("attrs: cannot delete '" + name + "'")
 
-    fn keys(self) raises -> List[String]:
+    def keys(self) raises -> List[String]:
         """Get all attribute names.
 
         Returns:
@@ -263,7 +326,7 @@ struct AttributeManager:
             result.append(attr_name)
         return result^
 
-    fn __delitem__(self, name: String) raises:
+    def __delitem__(self, name: String) raises:
         """Delete an attribute (via ``del attrs[name]``).
 
         Args:
@@ -274,12 +337,40 @@ struct AttributeManager:
         """
         self.delete(name)
 
+    def get[
+        dtype: DType
+    ](self, name: String, default: Scalar[dtype]) -> Scalar[dtype]:
+        """Get an attribute value, returning default if not found.
+
+        Args:
+            name: Name of the attribute.
+            default: Value to return if attribute doesn't exist.
+
+        Returns:
+            The attribute value, or default if not found.
+        """
+        var aid = self._lib[].open_attr(self._loc_id, name)
+        if aid < 0:
+            return default
+        var buf = alloc[Scalar[dtype]](1)
+        var rc = self._lib[].read_attr(
+            aid, _hdf5_type_id[dtype](self._lib[]), buf.bitcast[NoneType]()
+        )
+        _ = self._lib[].close_attr(aid)
+        if rc < 0:
+            buf.free()
+            return default
+        var v = buf[0]
+        buf.free()
+        return v
+
 
 # ===----------------------------------------------------------------------=== #
 # Dataset
 # ===----------------------------------------------------------------------=== #
 
-struct Dataset(Movable):
+
+struct Dataset(Copyable, Movable):
     """Proxy for an HDF5 dataset, similar to ``h5py.Dataset``.
 
     Represents an HDF5 dataset containing multidimensional array data.
@@ -305,25 +396,28 @@ struct Dataset(Movable):
     var _shape: List[Int]
     var _dtype_code: Int
     var _name: String
+    var _filename: String
     var _lib: UnsafePointer[HDF5Lib, MutExt]
     var _closed_bool: Bool
 
-    fn __init__(
+    def __init__(
         out self,
         lib: UnsafePointer[HDF5Lib, MutExt],
         did: hid_t,
         shape: List[Int],
         dtype_code: Int,
         name: String,
+        filename: String = "",
     ):
         self._did = did
         self._shape = shape.copy()
         self._dtype_code = dtype_code
         self._name = name
+        self._filename = filename
         self._lib = lib
         self._closed_bool = False
 
-    fn shape(self) -> List[Int]:
+    def shape(self) -> List[Int]:
         """Get the shape of the dataset.
 
         Returns:
@@ -331,7 +425,7 @@ struct Dataset(Movable):
         """
         return self._shape.copy()
 
-    fn ndim(self) -> Int:
+    def ndim(self) -> Int:
         """Get the number of dimensions.
 
         Returns:
@@ -339,7 +433,7 @@ struct Dataset(Movable):
         """
         return len(self._shape)
 
-    fn size(self) -> Int:
+    def size(self) -> Int:
         """Get the total number of elements.
 
         Returns:
@@ -350,7 +444,7 @@ struct Dataset(Movable):
             s *= d
         return s
 
-    fn dtype(self) -> String:
+    def dtype(self) -> String:
         """Get the HDF5 datatype as a string.
 
         Returns:
@@ -367,7 +461,7 @@ struct Dataset(Movable):
         else:
             return "unknown"
 
-    fn name(self) -> String:
+    def name(self) -> String:
         """Get the full path name of the dataset in the HDF5 file.
 
         Returns:
@@ -375,7 +469,7 @@ struct Dataset(Movable):
         """
         return self._name
 
-    fn attrs(self) -> AttributeManager:
+    def attrs(self) -> AttributeManager:
         """Get the attribute manager for this dataset.
 
         Returns:
@@ -383,9 +477,80 @@ struct Dataset(Movable):
         """
         return AttributeManager(self._lib, self._did)
 
-    fn read[dtype: DType](
-        self, buf: UnsafePointer[Scalar[dtype], MutExt], n: Int
-    ) raises:
+    def chunks(self) -> List[Int]:
+        """Get the chunk shape of the dataset.
+
+        Returns:
+            A list of chunk dimensions, or empty list if not chunked.
+        """
+        var result = List[Int]()
+        var dcpl = self._lib[].get_dcpl(self._did)
+        if dcpl < 0:
+            return result^
+        var nd = self._lib[].get_chunk_dims(dcpl, len(self._shape))
+        _ = self._lib[].close_dcpl(dcpl)
+        if nd == 0:
+            return List[Int]()
+        return self._shape.copy()
+
+    def maxshape(self) -> List[Int]:
+        """Get the maximum shape of the dataset.
+
+        Returns:
+            A list of maximum dimensions. For non-chunked datasets, this equals shape.
+            For chunked datasets, returns chunk dimensions as maxshape.
+        """
+        var chunks = self.chunks()
+        if len(chunks) > 0:
+            return chunks.copy()
+        return self._shape.copy()
+
+    def resize(mut self, new_size: Int) raises:
+        """Resize the dataset along axis 0.
+
+        Only works if the dataset was created with maxshape allowing expansion.
+
+        Args:
+            new_size: The new size for axis 0.
+
+        Raises:
+            Error: If the resize operation fails.
+        """
+        var rc = self._lib[].resize_dataset(self._did, hsize_t(new_size))
+        if rc < 0:
+            raise Error("Dataset: resize failed for '" + self._name + "'")
+        self._shape[0] = new_size
+
+    def file(self) -> String:
+        """Get the filename this dataset belongs to.
+
+        Returns:
+            The path to the containing HDF5 file.
+        """
+        var fid = self._lib[].get_file_id(self._did)
+        var name = self._lib[].get_file_name(fid)
+        _ = self._lib[].close_file(fid)
+        if name != "":
+            return name
+        return self._filename
+
+    def parent(self) -> String:
+        """Get the parent group path of this dataset.
+
+        Returns:
+            The parent path, or "/" if at root level.
+        """
+        var last_slash = -1
+        for i in range(len(self._name)):
+            if self._name[byte=i] == "/":
+                last_slash = i
+        if last_slash <= 0:
+            return "/"
+        return String(self._name[byte=:last_slash])
+
+    def read[
+        dtype: DType
+    ](self, buf: UnsafePointer[Scalar[dtype], MutExt], n: Int) raises:
         """Read dataset data into a pre-allocated buffer.
 
         Parameters:
@@ -399,14 +564,16 @@ struct Dataset(Movable):
             Error: If the read operation fails.
         """
         var rc = self._lib[].read_dataset(
-            self._did, _hdf5_type_id[dtype](self._lib[]), buf.bitcast[NoneType]()
+            self._did,
+            _hdf5_type_id[dtype](self._lib[]),
+            buf.bitcast[NoneType](),
         )
         if rc < 0:
             raise Error("Dataset: H5Dread failed for '" + self._name + "'")
 
-    fn write[dtype: DType](
-        self, data: UnsafePointer[Scalar[dtype], MutExt], n: Int
-    ) raises:
+    def write[
+        dtype: DType
+    ](self, data: UnsafePointer[Scalar[dtype], MutExt], n: Int) raises:
         """Write data from a buffer into the dataset.
 
         Parameters:
@@ -420,12 +587,14 @@ struct Dataset(Movable):
             Error: If the write operation fails.
         """
         var rc = self._lib[].write_dataset(
-            self._did, _hdf5_type_id[dtype](self._lib[]), data.bitcast[NoneType]()
+            self._did,
+            _hdf5_type_id[dtype](self._lib[]),
+            data.bitcast[NoneType](),
         )
         if rc < 0:
             raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
 
-    fn read_all[dtype: DType](self) raises -> NDArray[dtype]:
+    def read_all[dtype: DType](self) raises -> NDArray[dtype]:
         """Read the entire dataset into an NDArray.
 
         Supports 1-D and 2-D datasets. Call .free() on the returned
@@ -469,9 +638,9 @@ struct Dataset(Movable):
         else:
             raise Error("Dataset: unsupported rank for '" + self._name + "'")
 
-    fn write_all[dtype: DType](
-        self, data: UnsafePointer[Scalar[dtype], MutExt]
-    ) raises:
+    def write_all[
+        dtype: DType
+    ](self, data: UnsafePointer[Scalar[dtype], MutExt]) raises:
         """Write entire buffer contents to the dataset.
 
         Parameters:
@@ -484,32 +653,26 @@ struct Dataset(Movable):
             Error: If the write operation fails.
         """
         var rc = self._lib[].write_dataset(
-            self._did, _hdf5_type_id[dtype](self._lib[]), data.bitcast[NoneType]()
+            self._did,
+            _hdf5_type_id[dtype](self._lib[]),
+            data.bitcast[NoneType](),
         )
         if rc < 0:
             raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
 
-
-
-    fn close(mut self):
+    def close(mut self):
         if not self._closed_bool and self._did >= 0:
             _ = self._lib[].close_dataset(self._did)
             self._did = -1
             self._closed_bool = True
-
-    @staticmethod
-    fn _closed(lib: UnsafePointer[HDF5Lib, MutExt]) -> Dataset:
-        var shape = List[Int]()
-        var d = Dataset(lib, hid_t(-1), shape, -1, "")
-        d._closed_bool = True
-        return d^
 
 
 # ===----------------------------------------------------------------------=== #
 # Group
 # ===----------------------------------------------------------------------=== #
 
-struct Group(Movable):
+
+struct Group(Copyable, Movable):
     """HDF5 group with dict-like interface, similar to ``h5py.Group``.
 
     Groups are container structures that can hold datasets and other groups,
@@ -534,24 +697,27 @@ struct Group(Movable):
 
     var _gid: hid_t
     var _name: String
+    var _filename: String
     var _lib: UnsafePointer[HDF5Lib, MutExt]
     var _is_file: Bool
     var _closed_bool: Bool
 
-    fn __init__(
+    def __init__(
         out self,
         lib: UnsafePointer[HDF5Lib, MutExt],
         gid: hid_t,
         name: String,
         is_file: Bool = False,
+        filename: String = "",
     ):
         self._gid = gid
         self._name = name
+        self._filename = filename
         self._lib = lib
         self._is_file = is_file
         self._closed_bool = False
 
-    fn name(self) -> String:
+    def name(self) -> String:
         """Get the full path name of the group in the HDF5 file.
 
         Returns:
@@ -559,7 +725,7 @@ struct Group(Movable):
         """
         return self._name
 
-    fn attrs(self) -> AttributeManager:
+    def attrs(self) -> AttributeManager:
         """Get the attribute manager for this group.
 
         Returns:
@@ -567,7 +733,36 @@ struct Group(Movable):
         """
         return AttributeManager(self._lib, self._gid)
 
-    fn close(mut self):
+    def file(self) -> String:
+        """Get the filename this group belongs to.
+
+        Returns:
+            The path to the containing HDF5 file.
+        """
+        var fid = self._lib[].get_file_id(self._gid)
+        var name = self._lib[].get_file_name(fid)
+        _ = self._lib[].close_file(fid)
+        if name != "":
+            return name
+        return self._filename
+
+    def parent(self) -> String:
+        """Get the parent group path.
+
+        Returns:
+            The parent path, or "/" if this is the root group.
+        """
+        if self._name == "/":
+            return "/"
+        var last_slash = -1
+        for i in range(len(self._name)):
+            if self._name[byte=i] == "/":
+                last_slash = i
+        if last_slash <= 0:
+            return "/"
+        return String(self._name[byte=:last_slash])
+
+    def close(mut self):
         """Close the group and release resources.
 
         For File objects, prefer calling File.close() instead.
@@ -579,13 +774,7 @@ struct Group(Movable):
         self._gid = -1
         self._closed_bool = True
 
-    @staticmethod
-    fn _closed(lib: UnsafePointer[HDF5Lib, MutExt]) -> Group:
-        var g = Group(lib, hid_t(-1), "", is_file=False)
-        g._closed_bool = True
-        return g^
-
-    fn __contains__(self, member_name: String) -> Bool:
+    def __contains__(self, member_name: String) -> Bool:
         """Check if a member (group or dataset) exists.
 
         Args:
@@ -596,7 +785,56 @@ struct Group(Movable):
         """
         return self._lib[].object_exists(self._gid, member_name)
 
-    fn keys(self) raises -> List[String]:
+    fn contains(self, member_name: String) -> Bool:
+        """Check if a member exists.
+
+        Args:
+            member_name: Name of the member to check.
+
+        Returns:
+            True if the member exists, False otherwise.
+        """
+        return self.__contains__(member_name)
+
+    fn get(self, member_name: String) raises -> H5Object:
+        """Get a member by name.
+
+        Args:
+            member_name: Name of the member to retrieve.
+
+        Returns:
+            An H5Object wrapping the group or dataset.
+
+        Raises:
+            Error: If the member does not exist or cannot be opened.
+        """
+        return self.__getitem__(member_name)
+
+    fn delete(self, member_name: String) raises:
+        """Delete a member (group or dataset).
+
+        Args:
+            member_name: Name of the member to delete.
+
+        Raises:
+            Error: If deletion fails.
+        """
+        var rc = self._lib[].delete_object(self._gid, member_name)
+        if rc < 0:
+            raise Error("Group: cannot delete '" + member_name + "'")
+
+    fn len(self) raises -> Int:
+        """Get the number of members in this group.
+
+        Returns:
+            The number of direct children.
+
+        Raises:
+            Error: If counting fails.
+        """
+        return self.__len__()
+
+    def keys(self) raises -> List[String]:
         """Get names of all members in this group.
 
         Returns:
@@ -607,7 +845,7 @@ struct Group(Movable):
         """
         return self._get_member_names().copy()
 
-    fn __len__(self) raises -> Int:
+    def __len__(self) raises -> Int:
         """Get the number of members in this group.
 
         Returns:
@@ -618,7 +856,7 @@ struct Group(Movable):
         """
         return len(self._get_member_names())
 
-    fn __iter__(self) raises -> List[String]:
+    def __iter__(self) raises -> List[String]:
         """Iterate over member names (returns list for Mojo compatibility).
 
         Returns:
@@ -629,7 +867,7 @@ struct Group(Movable):
         """
         return self._get_member_names()
 
-    fn items(self) raises -> List[String]:
+    def items(self) raises -> List[String]:
         """Get names of all members (alias for keys()).
 
         Returns:
@@ -640,13 +878,30 @@ struct Group(Movable):
         """
         return self._get_member_names()
 
-    fn _get_member_names(self) raises -> List[String]:
+    def values(self) raises -> List[H5Object]:
+        """Get all member objects (groups and datasets).
+
+        Returns:
+            A list of H5Object wrappers.
+
+        Raises:
+            Error: If listing fails.
+        """
+        var result = List[H5Object]()
+        var names = self._get_member_names()
+        for name in names:
+            result.append(self[name])
+        return result^
+
+    def _get_member_names(self) raises -> List[String]:
         var result = List[String]()
         var idx: hsize_t = 0
         var dot = String(".\0")
         while True:
             var buf = alloc[c_char](512)
-            var name_len = self._lib[].handle.call["H5Lget_name_by_idx", c_ssize_t](
+            var name_len = self._lib[].handle.call[
+                "H5Lget_name_by_idx", c_ssize_t
+            ](
                 self._gid,
                 dot.unsafe_ptr().bitcast[c_char](),
                 c_int(0),
@@ -659,13 +914,14 @@ struct Group(Movable):
             if name_len < 0:
                 buf.free()
                 break
-            var member_name = String(buf)
+            var n = Int(name_len)
+            var member_name = String(unsafe_from_utf8=Span[Byte](ptr=buf.bitcast[UInt8](), length=n))
             buf.free()
             result.append(member_name)
             idx += 1
         return result^
 
-    fn __getitem__(self, member_name: String) raises -> H5Object:
+    def __getitem__(self, member_name: String) raises -> H5Object:
         """Get a member (group or dataset) by name.
 
         Args:
@@ -694,16 +950,16 @@ struct Group(Movable):
                 full_name = "/" + member_name
             else:
                 full_name = full_name + "/" + member_name
-            var g = Group(self._lib, gid, full_name)
-            return H5Object(g)
+            var g = Group(self._lib, gid, full_name, filename=self._filename)
+            return H5Object(g^)
 
         if otype == H5I_DATASET:
             var dset = self._open_dataset(member_name)
-            return H5Object(dset)
+            return H5Object(dset^)
 
         raise Error("Group: '" + member_name + "' not found")
 
-    fn _open_dataset(self, member_name: String) raises -> Dataset:
+    def _open_dataset(self, member_name: String) raises -> Dataset:
         """Open and return a dataset by name."""
         var did = self._lib[].open_dataset(self._gid, member_name)
         if did < 0:
@@ -742,9 +998,11 @@ struct Group(Movable):
         else:
             full_name = full_name + "/" + member_name
 
-        return Dataset(self._lib, did, shape, dtype_code, full_name)
+        return Dataset(
+            self._lib, did, shape, dtype_code, full_name, self._filename
+        )
 
-    fn create_group(self, name: String) raises -> Group:
+    def create_group(self, name: String) raises -> Group:
         """Create a group, including any intermediate groups in the path.
 
         Args:
@@ -767,7 +1025,13 @@ struct Group(Movable):
             current_path = "/"
 
         if i_start >= len(parts):
-            return Group(self._lib, current_gid, current_path, self._is_file)
+            return Group(
+                self._lib,
+                current_gid,
+                current_path,
+                self._is_file,
+                self._filename,
+            )
 
         var prev_gid: hid_t = -1
         for i in range(i_start, len(parts)):
@@ -778,7 +1042,9 @@ struct Group(Movable):
             if child_gid < 0:
                 child_gid = self._lib[].create_group(current_gid, part)
                 if child_gid < 0:
-                    raise Error("Group.create_group: cannot create '" + part + "'")
+                    raise Error(
+                        "Group.create_group: cannot create '" + part + "'"
+                    )
             if prev_gid >= 0 and prev_gid != self._gid:
                 _ = self._lib[].close_group(prev_gid)
             prev_gid = current_gid
@@ -788,9 +1054,11 @@ struct Group(Movable):
             else:
                 current_path = current_path + "/" + part
 
-        return Group(self._lib, current_gid, current_path)
+        return Group(
+            self._lib, current_gid, current_path, filename=self._filename
+        )
 
-    fn require_group(self, name: String) raises -> Group:
+    def require_group(self, name: String) raises -> Group:
         """Open an existing group or create it if it doesn't exist.
 
         Args:
@@ -811,14 +1079,12 @@ struct Group(Movable):
                 full_name = "/" + name
             else:
                 full_name = full_name + "/" + name
-            return Group(self._lib, gid, full_name)
+            return Group(self._lib, gid, full_name, filename=self._filename)
         return self.create_group(name)
 
-    fn create_dataset[dtype: DType](
-        self,
-        name: String,
-        shape: List[Int],
-    ) raises -> Dataset:
+    def create_dataset[
+        dtype: DType
+    ](self, name: String, shape: List[Int],) raises -> Dataset:
         """Create a new empty dataset.
 
         Parameters:
@@ -864,9 +1130,13 @@ struct Group(Movable):
         elif dtype == DType.int64:
             dtype_code = 3
 
-        return Dataset(self._lib, did, shape.copy(), dtype_code, full_name)
+        return Dataset(
+            self._lib, did, shape.copy(), dtype_code, full_name, self._filename
+        )
 
-    fn create_dataset_with_data[dtype: DType](
+    def create_dataset_with_data[
+        dtype: DType
+    ](
         self,
         name: String,
         shape: List[Int],
@@ -896,13 +1166,76 @@ struct Group(Movable):
         dset.write[dtype](data, total)
         return dset^
 
+    def require_dataset[
+        dtype: DType
+    ](self, name: String, shape: List[Int],) raises -> Dataset:
+        """Open an existing dataset or create a new one if it doesn't exist.
+
+        If the dataset exists, returns it. If not, creates a new dataset with
+        the given shape and dtype.
+
+        Parameters:
+            dtype: The datatype for the dataset (e.g., DType.float64, DType.int32).
+
+        Args:
+            name: Name of the dataset.
+            shape: Shape for the new dataset if created.
+
+        Returns:
+            The Dataset object (existing or newly created).
+
+        Raises:
+            Error: If the name exists but is not a dataset, or creation fails.
+        """
+        var did = self._lib[].require_dataset(
+            self._gid, name, shape, _hdf5_type_id[dtype](self._lib[])
+        )
+        if did < 0:
+            raise Error("require_dataset: failed for '" + name + "'")
+
+        var full_name = self._name
+        if full_name == "/":
+            full_name = "/" + name
+        else:
+            full_name = full_name + "/" + name
+
+        var sid = self._lib[].get_dataset_space(did)
+        var ndims = self._lib[].get_space_ndims(sid)
+        var dims = self._lib[].get_space_dims(sid, Int(ndims))
+        var read_shape = List[Int]()
+        for i in range(Int(ndims)):
+            read_shape.append(Int(dims[i]))
+        dims.free()
+        _ = self._lib[].close_dataspace(sid)
+
+        var tid = self._lib[].get_dataset_type(did)
+        var tclass = self._lib[].get_type_class(tid)
+        var tsize = Int(self._lib[].get_type_size(tid))
+        _ = self._lib[].close_type(tid)
+
+        var dtype_code: Int = 0
+        if tclass == H5T_FLOAT:
+            if tsize == 8:
+                dtype_code = 0
+            elif tsize == 4:
+                dtype_code = 1
+        elif tclass == H5T_INTEGER:
+            if tsize == 4:
+                dtype_code = 2
+            elif tsize == 8:
+                dtype_code = 3
+
+        return Dataset(
+            self._lib, did, read_shape, dtype_code, full_name, self._filename
+        )
+
 
 # ===----------------------------------------------------------------------=== #
 # H5Object
 # ===----------------------------------------------------------------------=== #
 
-# TODO: Try with Variant.
-struct H5Object(Movable):
+
+struct H5Object(Copyable, Movable):
     """Polymorphic wrapper for HDF5 groups or datasets.
 
     When accessing items from a Group or File using bracket notation,
@@ -924,23 +1257,13 @@ struct H5Object(Movable):
         f.close()
     """
 
-    var _kind: Int
-    var _group: Group
-    var _dataset: Dataset
+    var _value: Variant[Group, Dataset]
 
-    fn __init__(out self, mut group: Group):
-        var lib = group._lib
-        self._kind = 0
-        self._group = group^
-        self._dataset = Dataset._closed(lib)
-        group = Group._closed(lib)
+    def __init__(out self, var group: Group):
+        self._value = group^
 
-    fn __init__(out self, mut dataset: Dataset):
-        var lib = dataset._lib
-        self._kind = 1
-        self._dataset = dataset^
-        self._group = Group._closed(lib)
-        dataset = Dataset._closed(lib)
+    def __init__(out self, var dataset: Dataset):
+        self._value = dataset^
 
     fn is_group(self) -> Bool:
         """Check if this object is a Group.
@@ -948,7 +1271,7 @@ struct H5Object(Movable):
         Returns:
             True if this is a Group, False if it's a Dataset.
         """
-        return self._kind == 0
+        return self._value.isa[Group]()
 
     fn is_dataset(self) -> Bool:
         """Check if this object is a Dataset.
@@ -956,7 +1279,7 @@ struct H5Object(Movable):
         Returns:
             True if this is a Dataset, False if it's a Group.
         """
-        return self._kind == 1
+        return self._value.isa[Dataset]()
 
     fn group(mut self) raises -> Group:
         """Unwrap this object as a Group.
@@ -967,12 +1290,9 @@ struct H5Object(Movable):
         Raises:
             Error: If this object is not a Group.
         """
-        if self._kind != 0:
+        if not self._value.isa[Group]():
             raise Error("H5Object: not a group")
-        var lib = self._group._lib
-        var g = self._group^
-        self._group = Group._closed(lib)
-        return g^
+        return self._value[Group].copy()
 
     fn dataset(mut self) raises -> Dataset:
         """Unwrap this object as a Dataset.
@@ -983,22 +1303,18 @@ struct H5Object(Movable):
         Raises:
             Error: If this object is not a Dataset.
         """
-        if self._kind != 1:
+        if not self._value.isa[Dataset]():
             raise Error("H5Object: not a dataset")
-        var lib = self._dataset._lib
-        var d = self._dataset^
-        self._dataset = Dataset._closed(lib)
-        return d^
-
+        return self._value[Dataset].copy()
 
 
 # ===----------------------------------------------------------------------=== #
 # File
 # ===----------------------------------------------------------------------=== #
 
+
 # TODO: Add libver support.
-#
-struct File(Movable):
+struct File(Copyable, Movable):
     """HDF5 file object, similar to ``h5py.File``.
 
     Opens an HDF5 file and provides dict-like access to its contents.
@@ -1075,7 +1391,13 @@ struct File(Movable):
 
         if fid < 0:
             self._lib.free()
-            raise Error("File: cannot open/create '" + path + "' with mode '" + mode + "'")
+            raise Error(
+                "File: cannot open/create '"
+                + path
+                + "' with mode '"
+                + mode
+                + "'"
+            )
 
         self._fid = fid
 
@@ -1098,7 +1420,7 @@ struct File(Movable):
         if not self._closed and self._fid >= 0:
             _ = self._lib[].flush(self._fid)
 
-    fn filename(self) -> String:
+    def filename(self) -> String:
         """Get the filename.
 
         Returns:
@@ -1106,7 +1428,7 @@ struct File(Movable):
         """
         return self._filename
 
-    fn mode(self) -> String:
+    def mode(self) -> String:
         """Get the access mode.
 
         Returns:
@@ -1114,7 +1436,7 @@ struct File(Movable):
         """
         return self._mode
 
-    fn attrs(self) -> AttributeManager:
+    def attrs(self) -> AttributeManager:
         """Get the attribute manager for the file root.
 
         Returns:
@@ -1122,7 +1444,7 @@ struct File(Movable):
         """
         return AttributeManager(self._lib, self._fid)
 
-    fn name(self) -> String:
+    def name(self) -> String:
         """Get the name of the root group.
 
         Returns:
@@ -1142,6 +1464,55 @@ struct File(Movable):
         var root = Group(self._lib, self._fid, "/", is_file=True)
         return root.__contains__(member_name)
 
+    fn contains(self, member_name: String) -> Bool:
+        """Check if a member exists at the root level.
+
+        Args:
+            member_name: Name of the member to check.
+
+        Returns:
+            True if the member exists, False otherwise.
+        """
+        return self.__contains__(member_name)
+
+    fn get(self, member_name: String) raises -> H5Object:
+        """Get a member by name at the root level.
+
+        Args:
+            member_name: Name of the member to retrieve.
+
+        Returns:
+            An H5Object wrapping the group or dataset.
+
+        Raises:
+            Error: If the member does not exist or cannot be opened.
+        """
+        return self.__getitem__(member_name)
+
+    fn delete(self, member_name: String) raises:
+        """Delete a member at the root level.
+
+        Args:
+            member_name: Name of the member to delete.
+
+        Raises:
+            Error: If deletion fails.
+        """
+        var rc = self._lib[].delete_object(self._fid, member_name)
+        if rc < 0:
+            raise Error("File: cannot delete '" + member_name + "'")
+
+    fn len(self) raises -> Int:
+        """Get the number of members at the root level.
+
+        Returns:
+            The number of root-level members.
+
+        Raises:
+            Error: If counting fails.
+        """
+        return len(self.keys())
+
     def keys(self) raises -> List[String]:
         """Get names of all members at the root level.
 
@@ -1153,6 +1524,18 @@ struct File(Movable):
         """
         var root = Group(self._lib, self._fid, "/", is_file=True)
         return root.keys()
+
+    def values(self) raises -> List[H5Object]:
+        """Get all member objects at the root level.
+
+        Returns:
+            A list of H5Object wrappers.
+
+        Raises:
+            Error: If listing fails.
+        """
+        var root = Group(self._lib, self._fid, "/", is_file=True)
+        return root.values()
 
     def __getitem__(self, member_name: String) raises -> H5Object:
         """Get a member (group or dataset) at the root level.
@@ -1214,11 +1597,30 @@ struct File(Movable):
         var root = Group(self._lib, self._fid, "/", is_file=True)
         return root.require_group(name)
 
-    def create_dataset[dtype: DType](
+    def require_dataset[dtype: DType](
         self,
         name: String,
         shape: List[Int],
     ) raises -> Dataset:
+        """Open an existing dataset or create a new one if it doesn't exist.
+
+        Args:
+            name: Name of the dataset.
+            shape: Shape for the new dataset if created.
+            dtype: The Mojo DType for the dataset.
+
+        Returns:
+            The Dataset object (existing or newly created).
+
+        Raises:
+            Error: If the name exists but is not a dataset, or creation fails.
+        """
+        var root = Group(self._lib, self._fid, "/", is_file=True)
+        return root.require_dataset[dtype](name, shape)
+
+    def create_dataset[
+        dtype: DType
+    ](self, name: String, shape: List[Int],) raises -> Dataset:
         """Create a dataset at the root level.
 
         Parameters:
@@ -1237,7 +1639,9 @@ struct File(Movable):
         var root = Group(self._lib, self._fid, "/", is_file=True)
         return root.create_dataset[dtype](name, shape)
 
-    def create_dataset_with_data[dtype: DType](
+    def create_dataset_with_data[
+        dtype: DType
+    ](
         self,
         name: String,
         shape: List[Int],
