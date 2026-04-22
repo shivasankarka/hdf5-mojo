@@ -30,4 +30,4 @@ comptime __version__ = "0.2.0"
 
 from numojo.prelude import NDArray, Item, Shape, f64, f32, i32, i64
 
-from .core import File, Group, Dataset, AttributeManager, H5Object
+from .core import File

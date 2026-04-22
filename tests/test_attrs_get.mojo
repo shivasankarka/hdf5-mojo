@@ -17,7 +17,9 @@ def test_attrs_get_existing() raises:
     var version = f2.attrs().get[DType.int32]("version", Scalar[DType.int32](0))
     assert_equal(version, Int32(42), "version should be 42")
 
-    var scale = f2.attrs().get[DType.float64]("scale", Scalar[DType.float64](0.0))
+    var scale = f2.attrs().get[DType.float64](
+        "scale", Scalar[DType.float64](0.0)
+    )
     assert_equal(scale, Float64(3.14), "scale should be 3.14")
     f2.close()
 
@@ -31,10 +33,14 @@ def test_attrs_get_default() raises:
     f.close()
 
     var f2 = File("tests/test_attrs_get2.h5", "r")
-    var missing = f2.attrs().get[DType.int32]("missing", Scalar[DType.int32](999))
+    var missing = f2.attrs().get[DType.int32](
+        "missing", Scalar[DType.int32](999)
+    )
     assert_equal(missing, Int32(999), "missing attr should return default 999")
 
-    var existing = f2.attrs().get[DType.int32]("existing", Scalar[DType.int32](0))
+    var existing = f2.attrs().get[DType.int32](
+        "existing", Scalar[DType.int32](0)
+    )
     assert_equal(existing, Int32(100), "existing attr should be 100")
     f2.close()
 

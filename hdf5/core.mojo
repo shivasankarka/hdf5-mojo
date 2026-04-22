@@ -34,7 +34,9 @@ from std.utils import Variant
 from numojo import NDArray, Item, Shape
 
 comptime MutExt = MutExternalOrigin
-comptime LibRef[mut: Bool, //, origin: Origin[mut=mut]] = Pointer[HDF5Lib, origin]
+comptime LibRef[mut: Bool, //, origin: Origin[mut=mut]] = Pointer[
+    HDF5Lib, origin
+]
 
 
 # ===----------------------------------------------------------------------=== #
@@ -532,7 +534,9 @@ struct Dataset[
             raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
 
     # TODO: Still contains old 1D, 2D code, clean this up.
-    def read[dtype: DType](self) raises -> NDArray[dtype] where (
+    def read[
+        dtype: DType
+    ](self) raises -> NDArray[dtype] where (
         dtype == DType.float64
         or dtype == DType.float32
         or dtype == DType.int64
@@ -582,8 +586,9 @@ struct Dataset[
         else:
             raise Error("Dataset: unsupported rank for '" + self._name + "'")
 
-
-    def write[dtype: DType](self, data: NDArray[dtype]) raises where (
+    def write[
+        dtype: DType
+    ](self, data: NDArray[dtype]) raises where (
         dtype == DType.float64
         or dtype == DType.float32
         or dtype == DType.int64
@@ -1035,7 +1040,9 @@ struct Group[
                 full_name = "/" + name
             else:
                 full_name = full_name + "/" + name
-            return Group[Self.origin](self._lib, gid, full_name, filename=self._filename)
+            return Group[Self.origin](
+                self._lib, gid, full_name, filename=self._filename
+            )
         return self.create_group(name)
 
     def create_dataset[
@@ -1129,7 +1136,11 @@ struct Group[
 
     def create_dataset_with_data[
         dtype: DType
-    ](self, name: String, data: NDArray[dtype],) raises -> Dataset[Self.origin] where (
+    ](
+        self,
+        name: String,
+        data: NDArray[dtype],
+    ) raises -> Dataset[Self.origin] where (
         dtype == DType.float64
         or dtype == DType.float32
         or dtype == DType.int64
@@ -1438,7 +1449,9 @@ struct File(Movable):
         Returns:
             An AttributeManager for reading/writing file-level attributes.
         """
-        return AttributeManager[origin_of(self._lib[])](self._lib_ptr(), self._fid)
+        return AttributeManager[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid
+        )
 
     def name(self) -> String:
         """Get the name of the root group.
@@ -1457,7 +1470,9 @@ struct File(Movable):
         Returns:
             True if the member exists, False otherwise.
         """
-        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
         return root.__contains__(member_name)
 
     fn contains(self, member_name: String) -> Bool:
@@ -1471,7 +1486,9 @@ struct File(Movable):
         """
         return self.__contains__(member_name)
 
-    fn get(self, member_name: String) raises -> H5Object[origin_of(self._lib[])]:
+    fn get(
+        self, member_name: String
+    ) raises -> H5Object[origin_of(self._lib[])]:
         """Get a member by name at the root level.
 
         Args:
@@ -1530,10 +1547,14 @@ struct File(Movable):
         Raises:
             Error: If listing fails.
         """
-        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
         return root.values()
 
-    def __getitem__(self, member_name: String) raises -> H5Object[origin_of(self._lib[])]:
+    def __getitem__(
+        self, member_name: String
+    ) raises -> H5Object[origin_of(self._lib[])]:
         """Get a member (group or dataset) at the root level.
 
         Args:
@@ -1545,10 +1566,14 @@ struct File(Movable):
         Raises:
             Error: If the member does not exist or cannot be opened.
         """
-        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
         return root.__getitem__(member_name)
 
-    def _get_dataset(self, member_name: String) raises -> Dataset[origin_of(self._lib[])]:
+    def _get_dataset(
+        self, member_name: String
+    ) raises -> Dataset[origin_of(self._lib[])]:
         """Get a dataset directly by name.
 
         Args:
@@ -1560,10 +1585,14 @@ struct File(Movable):
         Raises:
             Error: If not a dataset or cannot be opened.
         """
-        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
         return root._open_dataset(member_name)
 
-    def create_group(self, name: String) raises -> Group[origin_of(self._lib[])]:
+    def create_group(
+        self, name: String
+    ) raises -> Group[origin_of(self._lib[])]:
         """Create a group at the root level.
 
         Args:
@@ -1575,10 +1604,14 @@ struct File(Movable):
         Raises:
             Error: If creation fails.
         """
-        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
         return root.create_group(name)
 
-    def require_group(self, name: String) raises -> Group[origin_of(self._lib[])]:
+    def require_group(
+        self, name: String
+    ) raises -> Group[origin_of(self._lib[])]:
         """Open an existing group or create it if it doesn't exist.
 
         Args:
@@ -1590,12 +1623,20 @@ struct File(Movable):
         Raises:
             Error: If path exists but is not a group.
         """
-        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
         return root.require_group(name)
 
     def require_dataset[
         dtype: DType
-    ](self, name: String, shape: List[Int],) raises -> Dataset[origin_of(self._lib[])]:
+    ](
+        self,
+        name: String,
+        shape: List[Int],
+    ) raises -> Dataset[
+        origin_of(self._lib[])
+    ]:
         """Open an existing dataset or create a new one if it doesn't exist.
 
         Parameters:
@@ -1611,12 +1652,20 @@ struct File(Movable):
         Raises:
             Error: If the name exists but is not a dataset, or creation fails.
         """
-        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
         return root.require_dataset[dtype](name, shape)
 
     def create_dataset[
         dtype: DType
-    ](self, name: String, shape: List[Int],) raises -> Dataset[origin_of(self._lib[])]:
+    ](
+        self,
+        name: String,
+        shape: List[Int],
+    ) raises -> Dataset[
+        origin_of(self._lib[])
+    ]:
         """Create a dataset at the root level.
 
         Parameters:
@@ -1632,7 +1681,9 @@ struct File(Movable):
         Raises:
             Error: If dataset creation fails.
         """
-        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
         return root.create_dataset[dtype](name, shape)
 
     def create_dataset_with_data[
@@ -1664,7 +1715,9 @@ struct File(Movable):
         Raises:
             Error: If creation or writing fails.
         """
-        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
         return root.create_dataset_with_data[dtype](name, shape, data)
 
     def __bool__(self) -> Bool:
