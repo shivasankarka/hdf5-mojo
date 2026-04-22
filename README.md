@@ -13,7 +13,7 @@ It has most of the basic features needed for working with datasets (and for my c
 - Read/write HDF5 files with h5py-style API
 - Create groups, datasets, and attributes
 - Support for `float64`, `float32`, `int32`, `int64` dtypes
-- 1-D and 2-D dataset reading with `read_all[dtype]()`
+- N-D Array reading with `read_all[dtype]()` (uses NuMojo NDArray in the backend.)
 - `require_group` / `require_dataset` helpers
 - Automatic library discovery via pixi
 
@@ -36,7 +36,7 @@ preview = ["pixi-build"]
 
 [package]
 name = "your_project_name"
-version = "0.1.0"
+version = "x.y.z"
 
 [package.build]
 backend = {name = "pixi-build-mojo", version = "0.*"}
@@ -71,7 +71,7 @@ pixi install
 ### Reading a file
 
 ```mojo
-from hdf5 import File
+from hdf5 import File, f64, i32
 
 def main() raises:
     var f = File("data.h5", "r")
@@ -83,17 +83,16 @@ def main() raises:
         print(dset.shape())   # [100, 50]
         print(dset.dtype())   # "float64"
         
-        # Read all data into an NDArray
-        var arr = dset.read_all[DType.float64]()
-        print(arr[0, 0])
-        arr.free()
+        # Read all data into an NuMojo NDArray
+        var arr = dset.read_all[f64]()
+        print("arr: ", arr)
 
     # Iterate over root-level items
     for name in f.keys():
         print(name)
 
     # Read attributes
-    var version = f.attrs().get[DType.int32]("version", Int32(0))
+    var version = f.attrs().get[i32]("version", Int32(0))
 
     f.close()
 ```
@@ -101,8 +100,7 @@ def main() raises:
 ### Writing a file
 
 ```mojo
-from hdf5 import File
-from std.memory import UnsafePointer, alloc
+from hdf5 import File, f64, i32
 
 def main() raises:
     var f = File("output.h5", "w")
@@ -112,17 +110,18 @@ def main() raises:
 
     # Create datasets
     var shape = List[Int](100, 50)
-    var dset = f.create_dataset[DType.float64]("results/data", shape)
+    var dset = f.create_dataset[f64]("results/data", shape)
 
     # Write data
     var n = 100 * 50
-    var buf = alloc[Scalar[DType.float64]](n)
+    var buf = alloc[Scalar[f64]](n)
     # ... fill buf with data ...
     dset.write[DType.float64](buf, n)
     buf.free()
+    # You can also pass a NDArray directly as buffer.
 
     # Write attributes
-    f.attrs().set[DType.int32]("version", Int32(1))
+    f.attrs().set[i32]("version", Int32(1))
 
     f.close()
 ```
@@ -144,17 +143,17 @@ example dataset.
 hdf5/
   __init__.mojo       # Package entry point
   ffi.mojo            # Low-level HDF5 C FFI wrapper (HDF5Lib)
-  core.mojo       # High-level h5py-compatible API
+  core.mojo           # High-level h5py-compatible API
 examples/
-  demo_api.mojo       # h5py-style API demonstration
-  sample_data.h5      # Sample HDF5 file
+  demo_api.mojo       # Demo file.
+  demo_data.h5        # Sample HDF5 file.
 ```
 
 ## Troubleshooting
 
 **File fails to open** — Ensure `libhdf5.dylib` is accessible. If using pixi, run `pixi install` first so `$CONDA_PREFIX` is set.
 
-**Memory leak warnings** — Call `.free()` on every `NDArray` returned by read methods and `.close()` on `File` when done.
+**Memory leak warnings** — Call `.close()` on `File` when done.
 
 **"dataset already exists" on write** — The write helpers refuse to overwrite existing datasets. Choose a new path or recreate the file.
 
