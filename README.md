@@ -13,7 +13,7 @@ It has most of the basic features needed for working with datasets (and for my c
 - Read/write HDF5 files with h5py-style API
 - Create groups, datasets, and attributes
 - Support for `float64`, `float32`, `int32`, `int64` dtypes
-- N-D Array reading with `read_all[dtype]()` (uses NuMojo NDArray in the backend.)
+- N-D Array reading with `read[dtype]()` (uses NuMojo NDArray in the backend.)
 - `require_group` / `require_dataset` helpers
 - Automatic library discovery via pixi
 
@@ -84,7 +84,7 @@ def main() raises:
         print(dset.dtype())   # "float64"
         
         # Read all data into an NuMojo NDArray
-        var arr = dset.read_all[f64]()
+        var arr = dset.read[f64]()
         print("arr: ", arr)
 
     # Iterate over root-level items
