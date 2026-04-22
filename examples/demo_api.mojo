@@ -28,7 +28,7 @@
 #   - Writing datasets:           create_dataset_with_data[dtype](name, shape, ptr)
 #   - Closing handles:            f.close()
 
-from hdf5 import File
+from hdf5 import File, f64, f32, i32, i64
 from numojo.prelude import NDArray
 
 
@@ -44,10 +44,10 @@ def main() raises:
     # Attributes can be Float64 or Int32 (pass the matching dtype).
     var meta_obj = f.get("/metadata")
     var meta = meta_obj.group()
-    var num_days = meta.attrs().read_scalar[DType.int32]("num_days")
-    var num_stations = meta.attrs().read_scalar[DType.int32]("num_stations")
-    var base_year = meta.attrs().read_scalar[DType.int32]("base_year")
-    var lat_origin = meta.attrs().read_scalar[DType.float64]("lat_origin")
+    var num_days = meta.attrs().read_scalar[i32]("num_days")
+    var num_stations = meta.attrs().read_scalar[i32]("num_stations")
+    var base_year = meta.attrs().read_scalar[i32]("base_year")
+    var lat_origin = meta.attrs().read_scalar[f64]("lat_origin")
     meta.close()
 
     print("=== Metadata attributes ===")
@@ -62,7 +62,7 @@ def main() raises:
     # ===----------------------------------------------------------------------=== #
     var elevation_obj = f.get("/sensors/elevation_m")
     var elevation_dset = elevation_obj.dataset()
-    var elevation = elevation_dset.read[DType.float64]()
+    var elevation = elevation_dset.read[f64]()
     elevation_dset.close()
 
     print("\n=== 1-D Float64: /sensors/elevation_m ===")
@@ -78,7 +78,7 @@ def main() raises:
     # ===----------------------------------------------------------------------=== #
     var station_id_obj = f.get("/sensors/station_id")
     var station_id_dset = station_id_obj.dataset()
-    var station_id = station_id_dset.read[DType.int32]()
+    var station_id = station_id_dset.read[i32]()
     station_id_dset.close()
 
     print("\n=== 1-D Int32: /sensors/station_id ===")
@@ -93,7 +93,7 @@ def main() raises:
     # ===----------------------------------------------------------------------=== #
     var temp_obj = f.get("/observations/temperature_c")
     var temp_dset = temp_obj.dataset()
-    var temp = temp_dset.read[DType.float64]()
+    var temp = temp_dset.read[f64]()
     temp_dset.close()
 
     print("\n=== 2-D Float64: /observations/temperature_c ===")
@@ -115,7 +115,7 @@ def main() raises:
     # ===----------------------------------------------------------------------=== #
     var humidity_obj = f.get("/observations/humidity_pct")
     var humidity_dset = humidity_obj.dataset()
-    var humidity = humidity_dset.read[DType.float32]()
+    var humidity = humidity_dset.read[f32]()
     humidity_dset.close()
 
     print("\n=== 2-D Float32: /observations/humidity_pct ===")
@@ -147,7 +147,7 @@ def main() raises:
     means[4] = 21.0
     var means_shape = List[Int]()
     means_shape.append(Int(num_stations))
-    var means_dset = summary.create_dataset_with_data[DType.float64](
+    var means_dset = summary.create_dataset_with_data[f64](
         "mean_temp_c", means_shape, means
     )
     means_dset.close()
@@ -163,7 +163,7 @@ def main() raises:
     var excerpt_shape = List[Int]()
     excerpt_shape.append(n_days_out)
     excerpt_shape.append(n_stat_out)
-    var excerpt_dset = daily.create_dataset_with_data[DType.float64](
+    var excerpt_dset = daily.create_dataset_with_data[f64](
         "temp_excerpt", excerpt_shape, excerpt
     )
     excerpt_dset.close()
@@ -192,7 +192,7 @@ def main() raises:
 
     var mean_obj = summary_r.get("mean_temp_c")
     var mean_dset = mean_obj.dataset()
-    var mean_back = mean_dset.read[DType.float64]()
+    var mean_back = mean_dset.read[f64]()
     mean_dset.close()
     print("\n=== Round-trip read ===")
     print("  mean_temp_c:", end="")
@@ -205,7 +205,7 @@ def main() raises:
 
     var exc_obj = daily_r.get("temp_excerpt")
     var exc_dset = exc_obj.dataset()
-    var exc_back = exc_dset.read[DType.float64]()
+    var exc_back = exc_dset.read[f64]()
     exc_dset.close()
     print("  temp_excerpt shape:", exc_back.shape[0], "×", exc_back.shape[1])
     print("  exc_back[1, 2] =", exc_back.item(1, 2), " (expected 12.0)")
