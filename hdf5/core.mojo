@@ -29,11 +29,12 @@ from hdf5.ffi import (
     H5T_INTEGER,
     H5T_FLOAT,
 )
-from std.memory import UnsafePointer
+from std.memory import OwnedPointer, Pointer, UnsafePointer
 from std.utils import Variant
 from numojo import NDArray, Item, Shape
 
 comptime MutExt = MutExternalOrigin
+comptime LibRef[mut: Bool, //, origin: Origin[mut=mut]] = Pointer[HDF5Lib, origin]
 
 
 # ===----------------------------------------------------------------------=== #
@@ -61,9 +62,11 @@ def _hdf5_type_id[dtype: DType](lib: HDF5Lib) -> hid_t:
 # ===----------------------------------------------------------------------=== #
 
 
-# TODO: Replace UnsafePointer everywhere with Pointer since we are only referencing
-# HDF5Lib everywhere.
-struct AttributeManager:
+struct AttributeManager[
+    mut: Bool,
+    //,
+    origin: Origin[mut=mut],
+](Copyable, Movable):
     """Dict-like proxy for HDF5 attributes on a Group or Dataset.
 
     Attributes are user-defined metadata attached to HDF5 objects (groups or
@@ -78,9 +81,9 @@ struct AttributeManager:
     """
 
     var _loc_id: hid_t
-    var _lib: UnsafePointer[HDF5Lib, MutExt]
+    var _lib: LibRef[Self.origin]
 
-    def __init__(out self, lib: UnsafePointer[HDF5Lib, MutExt], loc_id: hid_t):
+    def __init__(out self, lib: LibRef[Self.origin], loc_id: hid_t):
         self._loc_id = loc_id
         self._lib = lib
 
@@ -285,7 +288,11 @@ struct AttributeManager:
 # ===----------------------------------------------------------------------=== #
 
 
-struct Dataset(Copyable, Movable):
+struct Dataset[
+    mut: Bool,
+    //,
+    origin: Origin[mut=mut],
+](Copyable, Movable):
     """Proxy for an HDF5 dataset, similar to ``h5py.Dataset``.
 
     Represents an HDF5 dataset containing multidimensional array data.
@@ -301,7 +308,7 @@ struct Dataset(Copyable, Movable):
             print(dset.dtype())   # "float64"
             print(dset.ndim())    # 2
             print(dset.size())    # 5000
-            var arr = dset.read_all[DType.float64]()
+            var arr = dset.read[DType.float64]()
             print(arr.get(0, 0))
             arr.free()
         f.close()
@@ -312,12 +319,12 @@ struct Dataset(Copyable, Movable):
     var _dtype_code: Int
     var _name: String
     var _filename: String
-    var _lib: UnsafePointer[HDF5Lib, MutExt]
+    var _lib: LibRef[Self.origin]
     var _closed_bool: Bool
 
     def __init__(
         out self,
-        lib: UnsafePointer[HDF5Lib, MutExt],
+        lib: LibRef[Self.origin],
         did: hid_t,
         shape: List[Int],
         dtype_code: Int,
@@ -386,13 +393,13 @@ struct Dataset(Copyable, Movable):
         """
         return self._name
 
-    def attrs(self) -> AttributeManager:
+    def attrs(self) -> AttributeManager[Self.origin]:
         """Get the attribute manager for this dataset.
 
         Returns:
             An AttributeManager for reading/writing attributes.
         """
-        return AttributeManager(self._lib, self._did)
+        return AttributeManager[Self.origin](self._lib, self._did)
 
     def chunks(self) -> List[Int]:
         """Get the chunk shape of the dataset.
@@ -486,7 +493,7 @@ struct Dataset(Copyable, Movable):
             Error: If the read operation fails.
 
         Constraints:
-            dtype must be one of DType.float64, DType.float32, DType.int32, or DType.int64.
+            `dtype` must be one of DType.float64, DType.float32, DType.int32, or DType.int64.
         """
         var rc = self._lib[].read_dataset(
             self._did,
@@ -544,7 +551,7 @@ struct Dataset(Copyable, Movable):
             Error: If the dataset has more than 2 dimensions or read fails.
 
         Constraints:
-            dtype must be one of DType.float64, DType.float32, DType.int32, or DType.int64.
+            `dtype` must be one of DType.float64, DType.float32, DType.int32, or DType.int64.
         """
         var nd = len(self._shape)
         if nd == 1:
@@ -615,7 +622,11 @@ struct Dataset(Copyable, Movable):
 # ===----------------------------------------------------------------------=== #
 
 
-struct Group(Copyable, Movable):
+struct Group[
+    mut: Bool,
+    //,
+    origin: Origin[mut=mut],
+](Copyable, Movable):
     """HDF5 group with dict-like interface, similar to ``h5py.Group``.
 
     Groups are container structures that can hold datasets and other groups,
@@ -633,7 +644,7 @@ struct Group(Copyable, Movable):
             var obj = g.get("data")
             if obj.is_dataset():
                 var dset = obj.dataset()
-                var arr = dset.read_all[DType.float64]()
+                var arr = dset.read[DType.float64]()
                 arr.free()
         f.close()
     """
@@ -641,13 +652,13 @@ struct Group(Copyable, Movable):
     var _gid: hid_t
     var _name: String
     var _filename: String
-    var _lib: UnsafePointer[HDF5Lib, MutExt]
+    var _lib: LibRef[Self.origin]
     var _is_file: Bool
     var _closed_bool: Bool
 
     def __init__(
         out self,
-        lib: UnsafePointer[HDF5Lib, MutExt],
+        lib: LibRef[Self.origin],
         gid: hid_t,
         name: String,
         is_file: Bool = False,
@@ -668,13 +679,13 @@ struct Group(Copyable, Movable):
         """
         return self._name
 
-    def attrs(self) -> AttributeManager:
+    def attrs(self) -> AttributeManager[Self.origin]:
         """Get the attribute manager for this group.
 
         Returns:
             An AttributeManager for reading/writing attributes.
         """
-        return AttributeManager(self._lib, self._gid)
+        return AttributeManager[Self.origin](self._lib, self._gid)
 
     def file(self) -> String:
         """Get the filename this group belongs to.
@@ -739,7 +750,7 @@ struct Group(Copyable, Movable):
         """
         return self.__contains__(member_name)
 
-    fn get(self, member_name: String) raises -> H5Object:
+    fn get(self, member_name: String) raises -> H5Object[Self.origin]:
         """Get a member by name.
 
         Args:
@@ -821,7 +832,7 @@ struct Group(Copyable, Movable):
         """
         return self._get_member_names()
 
-    def values(self) raises -> List[H5Object]:
+    def values(self) raises -> List[H5Object[Self.origin]]:
         """Get all member objects (groups and datasets).
 
         Returns:
@@ -830,7 +841,7 @@ struct Group(Copyable, Movable):
         Raises:
             Error: If listing fails.
         """
-        var result = List[H5Object]()
+        var result = List[H5Object[Self.origin]]()
         var names = self._get_member_names()
         for name in names:
             result.append(self[name])
@@ -866,7 +877,7 @@ struct Group(Copyable, Movable):
             idx += 1
         return result^
 
-    def __getitem__(self, member_name: String) raises -> H5Object:
+    def __getitem__(self, member_name: String) raises -> H5Object[Self.origin]:
         """Get a member (group or dataset) by name.
 
         Args:
@@ -896,15 +907,15 @@ struct Group(Copyable, Movable):
             else:
                 full_name = full_name + "/" + member_name
             var g = Group(self._lib, gid, full_name, filename=self._filename)
-            return H5Object(g^)
+            return H5Object[Self.origin](g^)
 
         if otype == H5I_DATASET:
             var dset = self._open_dataset(member_name)
-            return H5Object(dset^)
+            return H5Object[Self.origin](dset^)
 
         raise Error("Group: '" + member_name + "' not found")
 
-    def _open_dataset(self, member_name: String) raises -> Dataset:
+    def _open_dataset(self, member_name: String) raises -> Dataset[Self.origin]:
         """Open and return a dataset by name."""
         var did = self._lib[].open_dataset(self._gid, member_name)
         if did < 0:
@@ -943,11 +954,11 @@ struct Group(Copyable, Movable):
         else:
             full_name = full_name + "/" + member_name
 
-        return Dataset(
+        return Dataset[Self.origin](
             self._lib, did, shape, dtype_code, full_name, self._filename
         )
 
-    def create_group(self, name: String) raises -> Group:
+    def create_group(self, name: String) raises -> Group[Self.origin]:
         """Create a group, including any intermediate groups in the path.
 
         Args:
@@ -970,7 +981,7 @@ struct Group(Copyable, Movable):
             current_path = "/"
 
         if i_start >= len(parts):
-            return Group(
+            return Group[Self.origin](
                 self._lib,
                 current_gid,
                 current_path,
@@ -999,11 +1010,11 @@ struct Group(Copyable, Movable):
             else:
                 current_path = current_path + "/" + part
 
-        return Group(
+        return Group[Self.origin](
             self._lib, current_gid, current_path, filename=self._filename
         )
 
-    def require_group(self, name: String) raises -> Group:
+    def require_group(self, name: String) raises -> Group[Self.origin]:
         """Open an existing group or create it if it doesn't exist.
 
         Args:
@@ -1024,12 +1035,12 @@ struct Group(Copyable, Movable):
                 full_name = "/" + name
             else:
                 full_name = full_name + "/" + name
-            return Group(self._lib, gid, full_name, filename=self._filename)
+            return Group[Self.origin](self._lib, gid, full_name, filename=self._filename)
         return self.create_group(name)
 
     def create_dataset[
         dtype: DType
-    ](self, name: String, shape: List[Int],) raises -> Dataset:
+    ](self, name: String, shape: List[Int],) raises -> Dataset[Self.origin]:
         """Create a new empty dataset.
 
         Parameters:
@@ -1075,7 +1086,7 @@ struct Group(Copyable, Movable):
         elif dtype == DType.int64:
             dtype_code = 3
 
-        return Dataset(
+        return Dataset[Self.origin](
             self._lib, did, shape.copy(), dtype_code, full_name, self._filename
         )
 
@@ -1086,7 +1097,12 @@ struct Group(Copyable, Movable):
         name: String,
         shape: List[Int],
         data: UnsafePointer[Scalar[dtype], MutExt],
-    ) raises -> Dataset:
+    ) raises -> Dataset[Self.origin] where (
+        dtype == DType.float64
+        or dtype == DType.float32
+        or dtype == DType.int64
+        or dtype == DType.int32
+    ):
         """Create a dataset and write data to it.
 
         Parameters:
@@ -1113,7 +1129,12 @@ struct Group(Copyable, Movable):
 
     def create_dataset_with_data[
         dtype: DType
-    ](self, name: String, data: NDArray[dtype],) raises -> Dataset:
+    ](self, name: String, data: NDArray[dtype],) raises -> Dataset[Self.origin] where (
+        dtype == DType.float64
+        or dtype == DType.float32
+        or dtype == DType.int64
+        or dtype == DType.int32
+    ):
         """Create a dataset and write data from NuMojo NDArray.
 
         Parameters:
@@ -1137,12 +1158,12 @@ struct Group(Copyable, Movable):
             shape.append(shp[0])
             shape.append(shp[1])
         var dset = self.create_dataset[dtype](name, shape)
-        dset.write_all[dtype](data)
+        dset.write[dtype](data)
         return dset^
 
     def require_dataset[
         dtype: DType
-    ](self, name: String, shape: List[Int],) raises -> Dataset:
+    ](self, name: String, shape: List[Int],) raises -> Dataset[Self.origin]:
         """Open an existing dataset or create a new one if it doesn't exist.
 
         If the dataset exists, returns it. If not, creates a new dataset with
@@ -1199,7 +1220,7 @@ struct Group(Copyable, Movable):
             elif tsize == 8:
                 dtype_code = 3
 
-        return Dataset(
+        return Dataset[Self.origin](
             self._lib, did, read_shape, dtype_code, full_name, self._filename
         )
 
@@ -1209,7 +1230,11 @@ struct Group(Copyable, Movable):
 # ===----------------------------------------------------------------------=== #
 
 
-struct H5Object(Copyable, Movable):
+struct H5Object[
+    mut: Bool,
+    //,
+    origin: Origin[mut=mut],
+](Copyable, Movable):
     """Polymorphic wrapper for HDF5 groups or datasets.
 
     When accessing items from a Group or File using get(),
@@ -1223,7 +1248,7 @@ struct H5Object(Copyable, Movable):
         var obj = f.get("path/to/item")
         if obj.is_dataset():
             var dset = obj.dataset()
-            var arr = dset.read_all[DType.float64]()
+            var arr = dset.read[DType.float64]()
             arr.free()
         elif obj.is_group():
             var grp = obj.group()
@@ -1231,12 +1256,12 @@ struct H5Object(Copyable, Movable):
         f.close()
     """
 
-    var _value: Variant[Group, Dataset]
+    var _value: Variant[Group[Self.origin], Dataset[Self.origin]]
 
-    def __init__(out self, var group: Group):
+    def __init__(out self, var group: Group[Self.origin]):
         self._value = group^
 
-    def __init__(out self, var dataset: Dataset):
+    def __init__(out self, var dataset: Dataset[Self.origin]):
         self._value = dataset^
 
     fn is_group(self) -> Bool:
@@ -1245,7 +1270,7 @@ struct H5Object(Copyable, Movable):
         Returns:
             True if this is a Group, False if it's a Dataset.
         """
-        return self._value.isa[Group]()
+        return self._value.isa[Group[Self.origin]]()
 
     fn is_dataset(self) -> Bool:
         """Check if this object is a Dataset.
@@ -1253,9 +1278,9 @@ struct H5Object(Copyable, Movable):
         Returns:
             True if this is a Dataset, False if it's a Group.
         """
-        return self._value.isa[Dataset]()
+        return self._value.isa[Dataset[Self.origin]]()
 
-    fn group(mut self) raises -> Group:
+    fn group(mut self) raises -> Group[Self.origin]:
         """Unwrap this object as a Group.
 
         Returns:
@@ -1264,11 +1289,11 @@ struct H5Object(Copyable, Movable):
         Raises:
             Error: If this object is not a Group.
         """
-        if not self._value.isa[Group]():
+        if not self._value.isa[Group[Self.origin]]():
             raise Error("H5Object: not a group")
-        return self._value[Group].copy()
+        return self._value[Group[Self.origin]].copy()
 
-    fn dataset(mut self) raises -> Dataset:
+    fn dataset(mut self) raises -> Dataset[Self.origin]:
         """Unwrap this object as a Dataset.
 
         Returns:
@@ -1277,9 +1302,9 @@ struct H5Object(Copyable, Movable):
         Raises:
             Error: If this object is not a Dataset.
         """
-        if not self._value.isa[Dataset]():
+        if not self._value.isa[Dataset[Self.origin]]():
             raise Error("H5Object: not a dataset")
-        return self._value[Dataset].copy()
+        return self._value[Dataset[Self.origin]].copy()
 
 
 # ===----------------------------------------------------------------------=== #
@@ -1288,7 +1313,7 @@ struct H5Object(Copyable, Movable):
 
 
 # TODO: Add libver support.
-struct File(Copyable, Movable):
+struct File(Movable):
     """HDF5 file object, similar to ``h5py.File``.
 
     Opens an HDF5 file and provides dict-like access to its contents.
@@ -1318,7 +1343,7 @@ struct File(Copyable, Movable):
         f.close()
     """
 
-    var _lib: UnsafePointer[HDF5Lib, MutExt]
+    var _lib: OwnedPointer[HDF5Lib]
     var _fid: hid_t
     var _filename: String
     var _mode: String
@@ -1335,10 +1360,7 @@ struct File(Copyable, Movable):
             Error: If the file cannot be opened/created with the given mode.
         """
         self._closed = False
-        var lib = alloc[HDF5Lib](1)
-        var tmp = HDF5Lib()
-        lib[0] = tmp^
-        self._lib = lib
+        self._lib = OwnedPointer(HDF5Lib())
         self._filename = path
         self._mode = mode
 
@@ -1353,7 +1375,6 @@ struct File(Copyable, Movable):
             var existing = self._lib[].open_file(path, H5F_ACC_RDONLY)
             if existing >= 0:
                 _ = self._lib[].close_file(existing)
-                self._lib.free()
                 raise Error("File: file exists '" + path + "'")
             fid = self._lib[].create_file(path, H5F_ACC_TRUNC)
         elif mode == "a":
@@ -1361,11 +1382,9 @@ struct File(Copyable, Movable):
             if fid < 0:
                 fid = self._lib[].create_file(path, H5F_ACC_TRUNC)
         else:
-            self._lib.free()
             raise Error("File: invalid mode '" + mode + "'")
 
         if fid < 0:
-            self._lib.free()
             raise Error(
                 "File: cannot open/create '"
                 + path
@@ -1385,7 +1404,6 @@ struct File(Copyable, Movable):
             _ = self._lib[].close_file(self._fid)
             self._fid = -1
             self._closed = True
-            self._lib.free()
 
     def flush(self):
         """Flush pending writes to disk.
@@ -1411,13 +1429,16 @@ struct File(Copyable, Movable):
         """
         return self._mode
 
-    def attrs(self) -> AttributeManager:
+    fn _lib_ptr(self) -> LibRef[origin_of(self._lib[])]:
+        return Pointer(to=self._lib[])
+
+    def attrs(self) -> AttributeManager[origin_of(self._lib[])]:
         """Get the attribute manager for the file root.
 
         Returns:
             An AttributeManager for reading/writing file-level attributes.
         """
-        return AttributeManager(self._lib, self._fid)
+        return AttributeManager[origin_of(self._lib[])](self._lib_ptr(), self._fid)
 
     def name(self) -> String:
         """Get the name of the root group.
@@ -1436,7 +1457,7 @@ struct File(Copyable, Movable):
         Returns:
             True if the member exists, False otherwise.
         """
-        var root = Group(self._lib, self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
         return root.__contains__(member_name)
 
     fn contains(self, member_name: String) -> Bool:
@@ -1450,7 +1471,7 @@ struct File(Copyable, Movable):
         """
         return self.__contains__(member_name)
 
-    fn get(self, member_name: String) raises -> H5Object:
+    fn get(self, member_name: String) raises -> H5Object[origin_of(self._lib[])]:
         """Get a member by name at the root level.
 
         Args:
@@ -1497,10 +1518,10 @@ struct File(Copyable, Movable):
         Raises:
             Error: If listing fails.
         """
-        var root = Group(self._lib, self._fid, "/", is_file=True)
+        var root = Group(self._lib_ptr(), self._fid, "/", is_file=True)
         return root.keys()
 
-    def values(self) raises -> List[H5Object]:
+    def values(self) raises -> List[H5Object[origin_of(self._lib[])]]:
         """Get all member objects at the root level.
 
         Returns:
@@ -1509,10 +1530,10 @@ struct File(Copyable, Movable):
         Raises:
             Error: If listing fails.
         """
-        var root = Group(self._lib, self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
         return root.values()
 
-    def __getitem__(self, member_name: String) raises -> H5Object:
+    def __getitem__(self, member_name: String) raises -> H5Object[origin_of(self._lib[])]:
         """Get a member (group or dataset) at the root level.
 
         Args:
@@ -1524,10 +1545,10 @@ struct File(Copyable, Movable):
         Raises:
             Error: If the member does not exist or cannot be opened.
         """
-        var root = Group(self._lib, self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
         return root.__getitem__(member_name)
 
-    def _get_dataset(self, member_name: String) raises -> Dataset:
+    def _get_dataset(self, member_name: String) raises -> Dataset[origin_of(self._lib[])]:
         """Get a dataset directly by name.
 
         Args:
@@ -1539,10 +1560,10 @@ struct File(Copyable, Movable):
         Raises:
             Error: If not a dataset or cannot be opened.
         """
-        var root = Group(self._lib, self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
         return root._open_dataset(member_name)
 
-    def create_group(self, name: String) raises -> Group:
+    def create_group(self, name: String) raises -> Group[origin_of(self._lib[])]:
         """Create a group at the root level.
 
         Args:
@@ -1554,10 +1575,10 @@ struct File(Copyable, Movable):
         Raises:
             Error: If creation fails.
         """
-        var root = Group(self._lib, self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
         return root.create_group(name)
 
-    def require_group(self, name: String) raises -> Group:
+    def require_group(self, name: String) raises -> Group[origin_of(self._lib[])]:
         """Open an existing group or create it if it doesn't exist.
 
         Args:
@@ -1569,12 +1590,12 @@ struct File(Copyable, Movable):
         Raises:
             Error: If path exists but is not a group.
         """
-        var root = Group(self._lib, self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
         return root.require_group(name)
 
     def require_dataset[
         dtype: DType
-    ](self, name: String, shape: List[Int],) raises -> Dataset:
+    ](self, name: String, shape: List[Int],) raises -> Dataset[origin_of(self._lib[])]:
         """Open an existing dataset or create a new one if it doesn't exist.
 
         Parameters:
@@ -1590,12 +1611,12 @@ struct File(Copyable, Movable):
         Raises:
             Error: If the name exists but is not a dataset, or creation fails.
         """
-        var root = Group(self._lib, self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
         return root.require_dataset[dtype](name, shape)
 
     def create_dataset[
         dtype: DType
-    ](self, name: String, shape: List[Int],) raises -> Dataset:
+    ](self, name: String, shape: List[Int],) raises -> Dataset[origin_of(self._lib[])]:
         """Create a dataset at the root level.
 
         Parameters:
@@ -1611,7 +1632,7 @@ struct File(Copyable, Movable):
         Raises:
             Error: If dataset creation fails.
         """
-        var root = Group(self._lib, self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
         return root.create_dataset[dtype](name, shape)
 
     def create_dataset_with_data[
@@ -1621,7 +1642,12 @@ struct File(Copyable, Movable):
         name: String,
         shape: List[Int],
         data: UnsafePointer[Scalar[dtype], MutExt],
-    ) raises -> Dataset:
+    ) raises -> Dataset[origin_of(self._lib[])] where (
+        dtype == DType.float64
+        or dtype == DType.float32
+        or dtype == DType.int64
+        or dtype == DType.int32
+    ):
         """Create a dataset at the root level and write data.
 
         Parameters:
@@ -1638,7 +1664,7 @@ struct File(Copyable, Movable):
         Raises:
             Error: If creation or writing fails.
         """
-        var root = Group(self._lib, self._fid, "/", is_file=True)
+        var root = Group[origin_of(self._lib[])](self._lib_ptr(), self._fid, "/", is_file=True)
         return root.create_dataset_with_data[dtype](name, shape, data)
 
     def __bool__(self) -> Bool:
