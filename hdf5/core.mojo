@@ -41,7 +41,7 @@ comptime MutExt = MutExternalOrigin
 # ===----------------------------------------------------------------------=== #
 
 
-# NOTE: Perhaps we should raises here, otherwise there'll be UB.
+# NOTE: Perhaps we should raise here, otherwise there'll be UB.
 def _hdf5_type_id[dtype: DType](lib: HDF5Lib) -> hid_t:
     """Map a Mojo DType to the matching HDF5 predefined type id."""
     comptime if dtype == DType.float64:
@@ -61,6 +61,8 @@ def _hdf5_type_id[dtype: DType](lib: HDF5Lib) -> hid_t:
 # ===----------------------------------------------------------------------=== #
 
 
+# TODO: Replace UnsafePointer everywhere with Pointer since we are only referencing
+# HDF5Lib everywhere.
 struct AttributeManager:
     """Dict-like proxy for HDF5 attributes on a Group or Dataset.
 
@@ -121,32 +123,6 @@ struct AttributeManager:
 
         Parameters:
             dtype: The data type to read as (e.g., DType.float64, DType.int32).
-
-        Args:
-            name: Name of the attribute to write.
-            value: The value to write.
-
-        Raises:
-            Error: If writing fails.
-        """
-        self.write_scalar[dtype](name, value)
-
-    fn contains(self, name: String) -> Bool:
-        """Check if an attribute exists.
-
-        Args:
-            name: Name of the attribute.
-
-        Returns:
-            True if the attribute exists, False otherwise.
-        """
-        return self.__contains__(name)
-
-    fn set[dtype: DType](self, name: String, value: Scalar[dtype]) raises:
-        """Write a scalar attribute value.
-
-        Parameters:
-            dtype: The data type (e.g., DType.float64, DType.int32).
 
         Args:
             name: Name of the attribute to write.
@@ -219,19 +195,6 @@ struct AttributeManager:
         if rc < 0:
             raise Error("attrs: write failed for '" + name + "'")
 
-    def delete(self, name: String) raises:
-        """Delete an attribute.
-
-        Args:
-            name: Name of the attribute to delete.
-
-        Raises:
-            Error: If the attribute cannot be deleted.
-        """
-        var rc = self._lib[].delete_attr(self._loc_id, name)
-        if rc < 0:
-            raise Error("attrs: cannot delete '" + name + "'")
-
     def keys(self) raises -> List[String]:
         """Get all attribute names.
 
@@ -250,8 +213,19 @@ struct AttributeManager:
             result.append(attr_name)
         return result^
 
-    def __delitem__(self, name: String) raises:
-        """Delete an attribute (via ``del attrs[name]``).
+    fn contains(self, name: String) -> Bool:
+        """Check if an attribute exists.
+
+        Args:
+            name: Name of the attribute.
+
+        Returns:
+            True if the attribute exists, False otherwise.
+        """
+        return self.__contains__(name)
+
+    def delete(self, name: String) raises:
+        """Delete an attribute.
 
         Args:
             name: Name of the attribute to delete.
@@ -259,7 +233,9 @@ struct AttributeManager:
         Raises:
             Error: If the attribute cannot be deleted.
         """
-        self.delete(name)
+        var rc = self._lib[].delete_attr(self._loc_id, name)
+        if rc < 0:
+            raise Error("attrs: cannot delete '" + name + "'")
 
     def get[
         dtype: DType
@@ -287,6 +263,21 @@ struct AttributeManager:
         var v = buf[0]
         buf.free()
         return v
+
+    fn set[dtype: DType](self, name: String, value: Scalar[dtype]) raises:
+        """Write a scalar attribute value.
+
+        Parameters:
+            dtype: The data type (e.g., DType.float64, DType.int32).
+
+        Args:
+            name: Name of the attribute to write.
+            value: The value to write.
+
+        Raises:
+            Error: If writing fails.
+        """
+        self.write_scalar[dtype](name, value)
 
 
 # ===----------------------------------------------------------------------=== #
@@ -368,6 +359,8 @@ struct Dataset(Copyable, Movable):
             s *= d
         return s
 
+    # TODO: I might be able to use comptime condition/where to
+    # make sure only these 4 dtypes are used.
     def dtype(self) -> String:
         """Get the HDF5 datatype as a string.
 
@@ -474,7 +467,12 @@ struct Dataset(Copyable, Movable):
 
     def read[
         dtype: DType
-    ](self, buf: UnsafePointer[Scalar[dtype], MutExt], n: Int) raises:
+    ](self, buf: UnsafePointer[Scalar[dtype], MutExt], n: Int) raises where (
+        dtype == DType.float64
+        or dtype == DType.float32
+        or dtype == DType.int64
+        or dtype == DType.int32
+    ):
         """Read dataset data into a pre-allocated buffer.
 
         Parameters:
@@ -486,6 +484,9 @@ struct Dataset(Copyable, Movable):
 
         Raises:
             Error: If the read operation fails.
+
+        Constraints:
+            dtype must be one of DType.float64, DType.float32, DType.int32, or DType.int64.
         """
         var rc = self._lib[].read_dataset(
             self._did,
@@ -497,7 +498,12 @@ struct Dataset(Copyable, Movable):
 
     def write[
         dtype: DType
-    ](self, data: UnsafePointer[Scalar[dtype], MutExt], n: Int) raises:
+    ](self, data: UnsafePointer[Scalar[dtype], MutExt], n: Int) raises where (
+        dtype == DType.float64
+        or dtype == DType.float32
+        or dtype == DType.int64
+        or dtype == DType.int32
+    ):
         """Write data from a buffer into the dataset.
 
         Parameters:
@@ -518,11 +524,15 @@ struct Dataset(Copyable, Movable):
         if rc < 0:
             raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
 
-    def read_all[dtype: DType](self) raises -> NDArray[dtype]:
+    # TODO: Still contains old 1D, 2D code, clean this up.
+    def read[dtype: DType](self) raises -> NDArray[dtype] where (
+        dtype == DType.float64
+        or dtype == DType.float32
+        or dtype == DType.int64
+        or dtype == DType.int32
+    ):
         """Read the entire dataset into an NDArray.
-
         Uses NuMojo NDArray for heap-allocated array storage.
-        Use Item() for indexing: arr[Item(i, j)] for 2D, arr[Item(i)] for 1D.
 
         Parameters:
             dtype: The data type to read as (e.g., DType.float64, DType.int32).
@@ -532,12 +542,15 @@ struct Dataset(Copyable, Movable):
 
         Raises:
             Error: If the dataset has more than 2 dimensions or read fails.
+
+        Constraints:
+            dtype must be one of DType.float64, DType.float32, DType.int32, or DType.int64.
         """
         var nd = len(self._shape)
         if nd == 1:
             var n = self._shape[0]
             var arr = NDArray[dtype](Shape(n))
-            var ptr = arr.unsafe_ptr().bitcast[Scalar[dtype]]()
+            var ptr = arr.unsafe_ptr()
             var rc = self._lib[].read_dataset(
                 self._did,
                 _hdf5_type_id[dtype](self._lib[]),
@@ -550,7 +563,7 @@ struct Dataset(Copyable, Movable):
             var rows = self._shape[0]
             var cols = self._shape[1]
             var arr = NDArray[dtype](Shape(rows, cols))
-            var ptr = arr.unsafe_ptr().bitcast[Scalar[dtype]]()
+            var ptr = arr.unsafe_ptr()
             var rc = self._lib[].read_dataset(
                 self._did,
                 _hdf5_type_id[dtype](self._lib[]),
@@ -562,29 +575,13 @@ struct Dataset(Copyable, Movable):
         else:
             raise Error("Dataset: unsupported rank for '" + self._name + "'")
 
-    def write_all[
-        dtype: DType
-    ](self, data: UnsafePointer[Scalar[dtype], MutExt]) raises:
-        """Write entire buffer contents to the dataset.
 
-        Parameters:
-            dtype: The data type to write as (e.g., DType.float64, DType.int32).
-
-        Args:
-            data: Buffer containing the data to write.
-
-        Raises:
-            Error: If the write operation fails.
-        """
-        var rc = self._lib[].write_dataset(
-            self._did,
-            _hdf5_type_id[dtype](self._lib[]),
-            data.bitcast[NoneType](),
-        )
-        if rc < 0:
-            raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
-
-    def write_all[dtype: DType](self, data: NDArray[dtype]) raises:
+    def write[dtype: DType](self, data: NDArray[dtype]) raises where (
+        dtype == DType.float64
+        or dtype == DType.float32
+        or dtype == DType.int64
+        or dtype == DType.int32
+    ):
         """Write entire NDArray contents to the dataset.
 
         Parameters:
