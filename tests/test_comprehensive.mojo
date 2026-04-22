@@ -254,7 +254,7 @@ def test_dataset_read_write() raises:
     var f2 = File("tests/test_dataset_rw.h5", "r")
     var obj = f2.get("data")
     var ds = obj.dataset()
-    var arr = ds.read_all[DType.float64]()
+    var arr = ds.read[DType.float64]()
     assert_equal(arr[Item(0)], 1.0, "first value should be 1.0")
     assert_equal(arr[Item(1)], 2.0, "second value should be 2.0")
     assert_equal(arr[Item(2)], 3.0, "third value should be 3.0")

@@ -62,7 +62,7 @@ def main() raises:
     # ===----------------------------------------------------------------------=== #
     var elevation_obj = f.get("/sensors/elevation_m")
     var elevation_dset = elevation_obj.dataset()
-    var elevation = elevation_dset.read_all[DType.float64]()
+    var elevation = elevation_dset.read[DType.float64]()
     elevation_dset.close()
 
     print("\n=== 1-D Float64: /sensors/elevation_m ===")
@@ -78,7 +78,7 @@ def main() raises:
     # ===----------------------------------------------------------------------=== #
     var station_id_obj = f.get("/sensors/station_id")
     var station_id_dset = station_id_obj.dataset()
-    var station_id = station_id_dset.read_all[DType.int32]()
+    var station_id = station_id_dset.read[DType.int32]()
     station_id_dset.close()
 
     print("\n=== 1-D Int32: /sensors/station_id ===")
@@ -93,7 +93,7 @@ def main() raises:
     # ===----------------------------------------------------------------------=== #
     var temp_obj = f.get("/observations/temperature_c")
     var temp_dset = temp_obj.dataset()
-    var temp = temp_dset.read_all[DType.float64]()
+    var temp = temp_dset.read[DType.float64]()
     temp_dset.close()
 
     print("\n=== 2-D Float64: /observations/temperature_c ===")
@@ -106,7 +106,7 @@ def main() raises:
     print()
     print("  col 0 (station 1, first 5 days):", end="")
     for d in range(5):
-        print("", temp.get(d, 0), end="")
+        print("", temp.item(d, 0), end="")
     # or use temp[:, 0] to get the first column (all days for station 1).
     print()
 
@@ -115,7 +115,7 @@ def main() raises:
     # ===----------------------------------------------------------------------=== #
     var humidity_obj = f.get("/observations/humidity_pct")
     var humidity_dset = humidity_obj.dataset()
-    var humidity = humidity_dset.read_all[DType.float32]()
+    var humidity = humidity_dset.read[DType.float32]()
     humidity_dset.close()
 
     print("\n=== 2-D Float32: /observations/humidity_pct ===")
@@ -192,7 +192,7 @@ def main() raises:
 
     var mean_obj = summary_r.get("mean_temp_c")
     var mean_dset = mean_obj.dataset()
-    var mean_back = mean_dset.read_all[DType.float64]()
+    var mean_back = mean_dset.read[DType.float64]()
     mean_dset.close()
     print("\n=== Round-trip read ===")
     print("  mean_temp_c:", end="")
@@ -205,7 +205,7 @@ def main() raises:
 
     var exc_obj = daily_r.get("temp_excerpt")
     var exc_dset = exc_obj.dataset()
-    var exc_back = exc_dset.read_all[DType.float64]()
+    var exc_back = exc_dset.read[DType.float64]()
     exc_dset.close()
     print("  temp_excerpt shape:", exc_back.shape[0], "×", exc_back.shape[1])
     print("  exc_back[1, 2] =", exc_back.item(1, 2), " (expected 12.0)")
