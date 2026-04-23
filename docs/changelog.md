@@ -2,6 +2,7 @@
 
 ## v0.2.0
 
+- Updated methods to be more `h5py` compatible. 
 - Added NuMojo NDArray as the backend for array operations!
 - Refactored internal HDF5 library handle ownership:
   - `File` now owns `HDF5Lib` with `OwnedPointer`.
