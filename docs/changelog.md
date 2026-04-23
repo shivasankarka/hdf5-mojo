@@ -9,3 +9,4 @@
 - Preserved `UnsafePointer` usage only for raw FFI data buffers.
 - Updated high-level examples and docs to use `read[dtype]()` consistently.
 - Corrected several docstring typos and dtype constraint wording.
+- Added `get()` method instead of `__getitem__` temporarily. 
