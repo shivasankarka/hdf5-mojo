@@ -6,7 +6,6 @@
 """
 HDF5 v0.2.0
 ============
-
 High-level HDF5 file I/O for Mojo with h5py-compatible API.
 
 Example usage:

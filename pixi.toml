@@ -20,6 +20,7 @@ demo = "mojo package hdf5 && mojo run -I ./ -I ./examples examples/demo_api.mojo
 tests = "sh ./tests/tests.sh && rm ./tests/*.h5"
 
 [dependencies]
-mojo = ">=0.26.2.0,<0.27"
+mojo = ">=1.0.0b1,<2"
 hdf5 = ">=2.1.0,<3"
-numojo = { git = "https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo", branch = "main"}
+# numojo = { git = "https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo", branch = "main"}
+numojo = { path = "../NuMojo/" }

@@ -6,7 +6,6 @@
 """
 Core HDF5 API (`hdf5.core`)
 =====================================
-
 Provides an API that mirrors the Python ``h5py`` library as closely as possible.
 """
 
@@ -45,7 +44,7 @@ comptime LibRef[mut: Bool, //, origin: Origin[mut=mut]] = Pointer[
 
 
 # NOTE: Perhaps we should raise here, otherwise there'll be UB.
-def _hdf5_type_id[dtype: DType](lib: HDF5Lib) -> hid_t:
+def _hdf5_type_id[dtype: DType](lib: HDF5Lib) raises -> hid_t:
     """Map a Mojo DType to the matching HDF5 predefined type id."""
     comptime if dtype == DType.float64:
         return lib.native_double
@@ -54,7 +53,7 @@ def _hdf5_type_id[dtype: DType](lib: HDF5Lib) -> hid_t:
     elif dtype == DType.int32:
         return lib.native_int32
     elif dtype == DType.int64:
-        return lib.handle.get_symbol[hid_t]("H5T_NATIVE_INT64_g")[]
+        return lib.handle.get_symbol[hid_t]("H5T_NATIVE_INT64_g").value()[]
     else:
         return lib.native_double
 
@@ -218,7 +217,7 @@ struct AttributeManager[
             result.append(attr_name)
         return result^
 
-    fn contains(self, name: String) -> Bool:
+    def contains(self, name: String) -> Bool:
         """Check if an attribute exists.
 
         Args:
@@ -244,7 +243,7 @@ struct AttributeManager[
 
     def get[
         dtype: DType
-    ](self, name: String, default: Scalar[dtype]) -> Scalar[dtype]:
+    ](self, name: String, default: Scalar[dtype]) raises -> Scalar[dtype]:
         """Get an attribute value, returning default if not found.
 
         Args:
@@ -269,7 +268,7 @@ struct AttributeManager[
         buf.free()
         return v
 
-    fn set[dtype: DType](self, name: String, value: Scalar[dtype]) raises:
+    def set[dtype: DType](self, name: String, value: Scalar[dtype]) raises:
         """Write a scalar attribute value.
 
         Parameters:
@@ -467,7 +466,7 @@ struct Dataset[
             The parent path, or "/" if at root level.
         """
         var last_slash = -1
-        for i in range(len(self._name)):
+        for i in range(self._name.byte_length()):
             if self._name[byte=i] == "/":
                 last_slash = i
         if last_slash <= 0:
@@ -714,7 +713,7 @@ struct Group[
         if self._name == "/":
             return "/"
         var last_slash = -1
-        for i in range(len(self._name)):
+        for i in range(self._name.byte_length()):
             if self._name[byte=i] == "/":
                 last_slash = i
         if last_slash <= 0:
@@ -744,7 +743,7 @@ struct Group[
         """
         return self._lib[].object_exists(self._gid, member_name)
 
-    fn contains(self, member_name: String) -> Bool:
+    def contains(self, member_name: String) -> Bool:
         """Check if a member exists.
 
         Args:
@@ -755,7 +754,7 @@ struct Group[
         """
         return self.__contains__(member_name)
 
-    fn get(self, member_name: String) raises -> H5Object[Self.origin]:
+    def get(self, member_name: String) raises -> H5Object[Self.origin]:
         """Get a member by name.
 
         Args:
@@ -769,7 +768,7 @@ struct Group[
         """
         return self.__getitem__(member_name)
 
-    fn delete(self, member_name: String) raises:
+    def delete(self, member_name: String) raises:
         """Delete a member (group or dataset).
 
         Args:
@@ -782,7 +781,7 @@ struct Group[
         if rc < 0:
             raise Error("Group: cannot delete '" + member_name + "'")
 
-    fn len(self) raises -> Int:
+    def len(self) raises -> Int:
         """Get the number of members in this group.
 
         Returns:
@@ -1275,7 +1274,7 @@ struct H5Object[
     def __init__(out self, var dataset: Dataset[Self.origin]):
         self._value = dataset^
 
-    fn is_group(self) -> Bool:
+    def is_group(self) -> Bool:
         """Check if this object is a Group.
 
         Returns:
@@ -1283,7 +1282,7 @@ struct H5Object[
         """
         return self._value.isa[Group[Self.origin]]()
 
-    fn is_dataset(self) -> Bool:
+    def is_dataset(self) -> Bool:
         """Check if this object is a Dataset.
 
         Returns:
@@ -1291,7 +1290,7 @@ struct H5Object[
         """
         return self._value.isa[Dataset[Self.origin]]()
 
-    fn group(mut self) raises -> Group[Self.origin]:
+    def group(mut self) raises -> Group[Self.origin]:
         """Unwrap this object as a Group.
 
         Returns:
@@ -1304,7 +1303,7 @@ struct H5Object[
             raise Error("H5Object: not a group")
         return self._value[Group[Self.origin]].copy()
 
-    fn dataset(mut self) raises -> Dataset[Self.origin]:
+    def dataset(mut self) raises -> Dataset[Self.origin]:
         """Unwrap this object as a Dataset.
 
         Returns:
@@ -1440,7 +1439,7 @@ struct File(Movable):
         """
         return self._mode
 
-    fn _lib_ptr(self) -> LibRef[origin_of(self._lib[])]:
+    def _lib_ptr(self) -> LibRef[origin_of(self._lib[])]:
         return Pointer(to=self._lib[])
 
     def attrs(self) -> AttributeManager[origin_of(self._lib[])]:
@@ -1475,7 +1474,7 @@ struct File(Movable):
         )
         return root.__contains__(member_name)
 
-    fn contains(self, member_name: String) -> Bool:
+    def contains(self, member_name: String) -> Bool:
         """Check if a member exists at the root level.
 
         Args:
@@ -1486,7 +1485,7 @@ struct File(Movable):
         """
         return self.__contains__(member_name)
 
-    fn get(
+    def get(
         self, member_name: String
     ) raises -> H5Object[origin_of(self._lib[])]:
         """Get a member by name at the root level.
@@ -1502,7 +1501,7 @@ struct File(Movable):
         """
         return self.__getitem__(member_name)
 
-    fn delete(self, member_name: String) raises:
+    def delete(self, member_name: String) raises:
         """Delete a member at the root level.
 
         Args:
@@ -1515,7 +1514,7 @@ struct File(Movable):
         if rc < 0:
             raise Error("File: cannot delete '" + member_name + "'")
 
-    fn len(self) raises -> Int:
+    def len(self) raises -> Int:
         """Get the number of members at the root level.
 
         Returns:

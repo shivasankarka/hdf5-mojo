@@ -6,7 +6,6 @@
 """
 Low-level HDF5 C API bindings (`hdf5.bindings`)
 ================================================
-
 Loads the HDF5 shared library at runtime via `OwnedDLHandle` and exposes a
 thin struct (`HDF5Lib`) whose methods map one-to-one onto HDF5 C API
 functions.  Every method returns the raw HDF5 return value so the caller
@@ -70,7 +69,7 @@ from std.pathlib import Path, cwd
 from std.sys.info import CompilationTarget
 
 
-fn _cstr(s: String) -> String:
+def _cstr(s: String) -> String:
     return s + "\0"
 
 
@@ -175,25 +174,31 @@ struct HDF5Lib(Movable):
                     "Unsupported platform; cannot determine library path"
                 )
             self.handle = OwnedDLHandle(libpath)
+            var ptr1: Optional[UnsafePointer[NoneType, MutExt]] = None
+            var ptr2: Optional[UnsafePointer[NoneType, MutExt]] = None
             _ = self.handle.call["H5open", herr_t]()
             _ = self.handle.call["H5Eset_auto2", herr_t](
                 hid_t(0),
-                UnsafePointer[NoneType, MutExt](),
-                UnsafePointer[NoneType, MutExt](),
+                # UnsafePointer[NoneType, MutExt].unsafe_dangling(),
+                # UnsafePointer[NoneType, MutExt].unsafe_dangling(),
+                ptr1,
+                ptr2,
             )
             self.native_double = self.handle.get_symbol[hid_t](
                 "H5T_NATIVE_DOUBLE_g"
-            )[]
+            ).value()[]
             self.native_float = self.handle.get_symbol[hid_t](
                 "H5T_NATIVE_FLOAT_g"
-            )[]
+            ).value()[]
             self.native_int = self.handle.get_symbol[hid_t](
                 "H5T_NATIVE_INT_g"
-            )[]
+            ).value()[]
             self.native_int32 = self.handle.get_symbol[hid_t](
                 "H5T_NATIVE_INT32_g"
-            )[]
-            self.std_i32le = self.handle.get_symbol[hid_t]("H5T_STD_I32LE_g")[]
+            ).value()[]
+            self.std_i32le = self.handle.get_symbol[hid_t](
+                "H5T_STD_I32LE_g"
+            ).value()[]
         else:
             raise Error(
                 "HDF5: CONDA_PREFIX not set; cannot determine library path"
@@ -212,22 +217,30 @@ struct HDF5Lib(Movable):
         """
         self.handle = OwnedDLHandle(libpath)
         _ = self.handle.call["H5open", herr_t]()
+        var ptr1: Optional[UnsafePointer[NoneType, MutExt]] = None
+        var ptr2: Optional[UnsafePointer[NoneType, MutExt]] = None
         _ = self.handle.call["H5Eset_auto2", herr_t](
             hid_t(0),
-            UnsafePointer[NoneType, MutExt](),
-            UnsafePointer[NoneType, MutExt](),
+            # UnsafePointer[NoneType, MutExt].unsafe_dangling(),
+            # UnsafePointer[NoneType, MutExt].unsafe_dangling(),
+            ptr1,
+            ptr2,
         )
         self.native_double = self.handle.get_symbol[hid_t](
             "H5T_NATIVE_DOUBLE_g"
-        )[]
+        ).value()[]
         self.native_float = self.handle.get_symbol[hid_t](
             "H5T_NATIVE_FLOAT_g"
-        )[]
-        self.native_int = self.handle.get_symbol[hid_t]("H5T_NATIVE_INT_g")[]
+        ).value()[]
+        self.native_int = self.handle.get_symbol[hid_t](
+            "H5T_NATIVE_INT_g"
+        ).value()[]
         self.native_int32 = self.handle.get_symbol[hid_t](
             "H5T_NATIVE_INT32_g"
-        )[]
-        self.std_i32le = self.handle.get_symbol[hid_t]("H5T_STD_I32LE_g")[]
+        ).value()[]
+        self.std_i32le = self.handle.get_symbol[hid_t](
+            "H5T_STD_I32LE_g"
+        ).value()[]
 
     @staticmethod
     def load() raises -> HDF5Lib:
@@ -444,9 +457,13 @@ struct HDF5Lib(Movable):
             A heap-allocated array of `ndims` dimension sizes.
             The caller is responsible for calling `.free()` on the result.
         """
+        var ptr: Optional[UnsafePointer[hsize_t, MutExt]] = None
         var dims = alloc[hsize_t](ndims)
         _ = self.handle.call["H5Sget_simple_extent_dims", c_int](
-            sid, dims, UnsafePointer[hsize_t, MutExt]()
+            # sid, dims, UnsafePointer[hsize_t, MutExt].unsafe_dangling()
+            sid,
+            dims,
+            ptr,
         )
         return dims
 
