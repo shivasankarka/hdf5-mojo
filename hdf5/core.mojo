@@ -55,7 +55,7 @@ def _hdf5_type_id[dtype: DType](lib: HDF5Lib) raises -> hid_t:
     elif dtype == DType.int64:
         return lib.handle.get_symbol[hid_t]("H5T_NATIVE_INT64_g").value()[]
     else:
-        return lib.native_double
+        raise Error("HDF5: unsupported DType")
 
 
 # ===----------------------------------------------------------------------=== #
@@ -182,6 +182,8 @@ struct AttributeManager[
         Raises:
             Error: If writing fails.
         """
+        if self.__contains__(name):
+            self.delete(name)
         var sid = self._lib[].create_attr_dataspace_scalar()
         if sid < 0:
             raise Error("attrs: H5Screate(scalar) failed")
@@ -408,27 +410,37 @@ struct Dataset[
         Returns:
             A list of chunk dimensions, or empty list if not chunked.
         """
-        var result = List[Int]()
         var dcpl = self._lib[].get_dcpl(self._did)
         if dcpl < 0:
-            return result^
-        var nd = self._lib[].get_chunk_dims(dcpl, len(self._shape))
-        _ = self._lib[].close_dcpl(dcpl)
-        if nd == 0:
             return List[Int]()
-        return self._shape.copy()
+        var chunks = self._lib[].get_chunk_dims(dcpl, len(self._shape))
+        _ = self._lib[].close_dcpl(dcpl)
+        return chunks^
 
     def maxshape(self) -> List[Int]:
         """Get the maximum shape of the dataset.
 
         Returns:
-            A list of maximum dimensions. For non-chunked datasets, this equals shape.
-            For chunked datasets, returns chunk dimensions as maxshape.
+            A list of maximum dimensions from the dataset dataspace.
         """
-        var chunks = self.chunks()
-        if len(chunks) > 0:
-            return chunks.copy()
-        return self._shape.copy()
+        var sid = self._lib[].get_dataset_space(self._did)
+        if sid < 0:
+            return List[Int]()
+        var ndims = self._lib[].get_space_ndims(sid)
+        if ndims < 0:
+            _ = self._lib[].close_dataspace(sid)
+            return List[Int]()
+        var dims = self._lib[].get_space_max_dims(sid, Int(ndims))
+        var result = List[Int]()
+        var unlimited = hsize_t(-1)
+        for i in range(Int(ndims)):
+            if dims[i] == unlimited:
+                result.append(-1)
+            else:
+                result.append(Int(dims[i]))
+        dims.free()
+        _ = self._lib[].close_dataspace(sid)
+        return result^
 
     def resize(mut self, new_size: Int) raises:
         """Resize the dataset along axis 0.
@@ -441,10 +453,30 @@ struct Dataset[
         Raises:
             Error: If the resize operation fails.
         """
-        var rc = self._lib[].resize_dataset(self._did, hsize_t(new_size))
+        var new_shape = self._shape.copy()
+        if len(new_shape) == 0:
+            raise Error("Dataset: cannot resize scalar dataset '" + self._name + "'")
+        new_shape[0] = new_size
+        self.resize(new_shape)
+
+    def resize(mut self, new_shape: List[Int]) raises:
+        """Resize the dataset to a new full shape.
+
+        Only works if the dataset was created with maxshape allowing the new
+        extent. The rank must match the current dataset rank.
+
+        Args:
+            new_shape: The new full dataset shape.
+
+        Raises:
+            Error: If the rank does not match or the resize operation fails.
+        """
+        if len(new_shape) != len(self._shape):
+            raise Error("Dataset: resize rank mismatch for '" + self._name + "'")
+        var rc = self._lib[].resize_dataset(self._did, new_shape)
         if rc < 0:
             raise Error("Dataset: resize failed for '" + self._name + "'")
-        self._shape[0] = new_size
+        self._shape = new_shape.copy()
 
     def file(self) -> String:
         """Get the filename this dataset belongs to.
@@ -1096,6 +1128,101 @@ struct Group[
             self._lib, did, shape.copy(), dtype_code, full_name, self._filename
         )
 
+    def create_dataset_chunked[
+        dtype: DType
+    ](
+        self,
+        name: String,
+        shape: List[Int],
+        maxshape: List[Int],
+        chunks: List[Int],
+    ) raises -> Dataset[Self.origin]:
+        """Create a chunked dataset with explicit maxshape.
+
+        Use ``-1`` in ``maxshape`` for an unlimited dimension.
+
+        Parameters:
+            dtype: The data type for the dataset (e.g., DType.float64, DType.int32).
+
+        Args:
+            name: Name of the dataset to create.
+            shape: Current dimensions.
+            maxshape: Maximum dimensions; -1 means unlimited.
+            chunks: Chunk dimensions.
+
+        Returns:
+            The created Dataset object.
+
+        Raises:
+            Error: If ranks mismatch or HDF5 creation fails.
+        """
+        var ndims = len(shape)
+        if len(maxshape) != ndims or len(chunks) != ndims:
+            raise Error("create_dataset_chunked: rank mismatch for '" + name + "'")
+
+        var dims = alloc[hsize_t](ndims)
+        var maxdims = alloc[hsize_t](ndims)
+        var chunk_dims = alloc[hsize_t](ndims)
+        var unlimited = hsize_t(-1)
+        for i in range(ndims):
+            dims[i] = hsize_t(shape[i])
+            if maxshape[i] < 0:
+                maxdims[i] = unlimited
+            else:
+                maxdims[i] = hsize_t(maxshape[i])
+            chunk_dims[i] = hsize_t(chunks[i])
+
+        var sid = self._lib[].create_dataspace_nd_max(ndims, dims, maxdims)
+        dims.free()
+        maxdims.free()
+        if sid < 0:
+            chunk_dims.free()
+            raise Error("create_dataset_chunked: H5Screate_simple failed")
+
+        var dcpl = self._lib[].create_dcpl()
+        if dcpl < 0:
+            chunk_dims.free()
+            _ = self._lib[].close_dataspace(sid)
+            raise Error("create_dataset_chunked: H5Pcreate failed")
+
+        var rc = self._lib[].set_chunk(dcpl, chunk_dims, ndims)
+        chunk_dims.free()
+        if rc < 0:
+            _ = self._lib[].close_dcpl(dcpl)
+            _ = self._lib[].close_dataspace(sid)
+            raise Error("create_dataset_chunked: H5Pset_chunk failed")
+
+        var tid = _hdf5_type_id[dtype](self._lib[])
+        var did = self._lib[].create_dataset_with_dcpl(
+            self._gid, name, tid, sid, dcpl
+        )
+        _ = self._lib[].close_dcpl(dcpl)
+        _ = self._lib[].close_dataspace(sid)
+        if did < 0:
+            raise Error(
+                "create_dataset_chunked: H5Dcreate2 failed for '" + name + "'"
+            )
+
+        var full_name = self._name
+        if full_name == "/":
+            full_name = "/" + name
+        else:
+            full_name = full_name + "/" + name
+
+        var dtype_code: Int = 0
+        comptime if dtype == DType.float64:
+            dtype_code = 0
+        elif dtype == DType.float32:
+            dtype_code = 1
+        elif dtype == DType.int32:
+            dtype_code = 2
+        elif dtype == DType.int64:
+            dtype_code = 3
+
+        return Dataset[Self.origin](
+            self._lib, did, shape.copy(), dtype_code, full_name, self._filename
+        )
+
     def create_dataset_with_data[
         dtype: DType
     ](
@@ -1684,6 +1811,26 @@ struct File(Movable):
             self._lib_ptr(), self._fid, "/", is_file=True
         )
         return root.create_dataset[dtype](name, shape)
+
+    def create_dataset_chunked[
+        dtype: DType
+    ](
+        self,
+        name: String,
+        shape: List[Int],
+        maxshape: List[Int],
+        chunks: List[Int],
+    ) raises -> Dataset[origin_of(self._lib[])]:
+        """Create a chunked dataset at the root level.
+
+        Use ``-1`` in ``maxshape`` for an unlimited dimension.
+        """
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
+        return root.create_dataset_chunked[dtype](
+            name, shape, maxshape, chunks
+        )
 
     def create_dataset_with_data[
         dtype: DType
