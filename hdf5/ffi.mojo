@@ -421,6 +421,26 @@ struct HDF5Lib(Movable):
             c_int(ndims), dims, dims
         )
 
+    def create_dataspace_nd_max(
+        self,
+        ndims: Int,
+        dims: UnsafePointer[hsize_t, MutExt],
+        maxdims: UnsafePointer[hsize_t, MutExt],
+    ) -> hid_t:
+        """Call ``H5Screate_simple`` with explicit maximum dimensions.
+
+        Args:
+            ndims: Number of dimensions.
+            dims: Current dimension sizes.
+            maxdims: Maximum dimension sizes. Use ``hsize_t(-1)`` for unlimited.
+
+        Returns:
+            A valid dataspace id (`hid_t`) on success; < 0 on failure.
+        """
+        return self.handle.call["H5Screate_simple", hid_t](
+            c_int(ndims), dims, maxdims
+        )
+
     def get_dataset_space(self, did: hid_t) -> hid_t:
         """Call ``H5Dget_space`` to retrieve the dataspace of an open dataset.
 
@@ -467,6 +487,29 @@ struct HDF5Lib(Movable):
         )
         return dims
 
+    def get_space_max_dims(
+        self, sid: hid_t, ndims: Int
+    ) -> UnsafePointer[hsize_t, MutExt]:
+        """Call ``H5Sget_simple_extent_dims`` and return max dimension sizes.
+
+        Args:
+            sid: An open dataspace id.
+            ndims: The number of dimensions (obtained from `get_space_ndims`).
+
+        Returns:
+            A heap-allocated array of `ndims` maximum dimension sizes.
+            The caller is responsible for calling `.free()` on the result.
+        """
+        var dims = alloc[hsize_t](ndims)
+        var maxdims = alloc[hsize_t](ndims)
+        _ = self.handle.call["H5Sget_simple_extent_dims", c_int](
+            sid,
+            dims,
+            maxdims,
+        )
+        dims.free()
+        return maxdims
+
     def close_dataspace(self, sid: hid_t) -> herr_t:
         """Call ``H5Sclose`` to release a dataspace id.
 
@@ -504,6 +547,25 @@ struct HDF5Lib(Movable):
             space_id,
             H5P_DEFAULT,
             H5P_DEFAULT,
+            H5P_DEFAULT,
+        )
+
+    def create_dataset_with_dcpl(
+        self,
+        loc_id: hid_t,
+        name: String,
+        type_id: hid_t,
+        space_id: hid_t,
+        dcpl: hid_t,
+    ) -> hid_t:
+        """Call ``H5Dcreate2`` with a dataset creation property list."""
+        return self.handle.call["H5Dcreate2", hid_t](
+            loc_id,
+            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            type_id,
+            space_id,
+            H5P_DEFAULT,
+            dcpl,
             H5P_DEFAULT,
         )
 
@@ -947,7 +1009,25 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Pclose", herr_t](dcpl)
 
-    def get_chunk_dims(self, dcpl: hid_t, ndims: Int) -> Int:
+    def create_dcpl(self) raises -> hid_t:
+        """Call ``H5Pcreate(H5P_DATASET_CREATE)``."""
+        var cls_id = self.handle.get_symbol[hid_t](
+            "H5P_CLS_DATASET_CREATE_ID_g"
+        ).value()[]
+        return self.handle.call["H5Pcreate", hid_t](cls_id)
+
+    def set_chunk(
+        self,
+        dcpl: hid_t,
+        chunks: UnsafePointer[hsize_t, MutExt],
+        ndims: Int,
+    ) -> herr_t:
+        """Call ``H5Pset_chunk`` on a dataset creation property list."""
+        return self.handle.call["H5Pset_chunk", herr_t](
+            dcpl, c_int(ndims), chunks
+        )
+
+    def get_chunk_dims(self, dcpl: hid_t, ndims: Int) -> List[Int]:
         """Call ``H5Pget_chunk`` to get chunk dimensions.
 
         Args:
@@ -955,27 +1035,32 @@ struct HDF5Lib(Movable):
             ndims: Number of dimensions.
 
         Returns:
-            Number of chunk dimensions, or 0 if not chunked.
+            Chunk dimensions, or an empty list if the dataset is not chunked.
         """
+        var result = List[Int]()
         var dims = alloc[hsize_t](ndims)
         var rc = self.handle.call["H5Pget_chunk", c_int](
             dcpl, c_int(ndims), dims
         )
+        if rc > 0:
+            for i in range(Int(rc)):
+                result.append(Int(dims[i]))
         dims.free()
-        return Int(rc)
+        return result^
 
-    def resize_dataset(self, did: hid_t, size: hsize_t) -> herr_t:
-        """Call ``H5Dset_extent`` to resize a dataset along axis 0.
+    def resize_dataset(self, did: hid_t, shape: List[Int]) -> herr_t:
+        """Call ``H5Dset_extent`` to resize a dataset to a full shape.
 
         Args:
             did: An open dataset id.
-            size: The new size for axis 0.
+            shape: The new full dataset shape.
 
         Returns:
             >= 0 on success; < 0 on failure.
         """
-        var dims = alloc[hsize_t](1)
-        dims[0] = size
+        var dims = alloc[hsize_t](len(shape))
+        for i in range(len(shape)):
+            dims[i] = hsize_t(shape[i])
         var rc = self.handle.call["H5Dset_extent", herr_t](did, dims)
         dims.free()
         return rc
