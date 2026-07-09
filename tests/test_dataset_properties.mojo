@@ -5,7 +5,7 @@ from hdf5 import File
 
 
 def test_dataset_chunks() raises:
-    print("Testing Dataset.chunks...")
+    print("Testing Dataset.chunks on contiguous dataset...")
     var f = File("tests/test_chunks.h5", "w")
 
     var shape = List[Int]()
@@ -20,7 +20,7 @@ def test_dataset_chunks() raises:
     assert_true(obj.is_dataset(), "should be a dataset")
     var dset = obj.dataset()
     var chunks = dset.chunks()
-    assert_equal(len(chunks), 2, "chunks returns shape copy")
+    assert_equal(len(chunks), 0, "contiguous datasets should not report chunks")
     dset.close()
     f2.close()
 
@@ -45,6 +45,43 @@ def test_dataset_maxshape() raises:
     assert_equal(maxshape[0], 10, "non-chunked maxshape equals shape")
     ds.close()
     f2.close()
+
+
+def test_dataset_chunked_resize() raises:
+    print("\nTesting chunked dataset metadata and resize...")
+    var f = File("tests/test_chunked_resize.h5", "w")
+
+    var shape = List[Int]()
+    shape.append(10)
+    shape.append(20)
+    var maxshape = List[Int]()
+    maxshape.append(30)
+    maxshape.append(-1)
+    var chunks = List[Int]()
+    chunks.append(5)
+    chunks.append(10)
+
+    var dset = f.create_dataset_chunked[DType.float64](
+        "data", shape, maxshape, chunks
+    )
+    var read_chunks = dset.chunks()
+    assert_equal(len(read_chunks), 2, "chunk rank should be 2")
+    assert_equal(read_chunks[0], 5, "first chunk dim should be 5")
+    assert_equal(read_chunks[1], 10, "second chunk dim should be 10")
+
+    var read_maxshape = dset.maxshape()
+    assert_equal(read_maxshape[0], 30, "first max dim should be 30")
+    assert_equal(read_maxshape[1], -1, "second max dim should be unlimited")
+
+    var new_shape = List[Int]()
+    new_shape.append(12)
+    new_shape.append(25)
+    dset.resize(new_shape)
+    assert_equal(dset.shape()[0], 12, "first resized dim should be 12")
+    assert_equal(dset.shape()[1], 25, "second resized dim should be 25")
+
+    dset.close()
+    f.close()
 
 
 def test_dataset_file_property() raises:
