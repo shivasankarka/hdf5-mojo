@@ -32,7 +32,7 @@ from std.memory import OwnedPointer, Pointer, UnsafePointer
 from std.utils import Variant
 from numojo import NDArray, Item, Shape
 
-comptime MutExt = MutExternalOrigin
+comptime MutExt = MutUntrackedOrigin
 comptime LibRef[mut: Bool, //, origin: Origin[mut=mut]] = Pointer[
     HDF5Lib, origin
 ]

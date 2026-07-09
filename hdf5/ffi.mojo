@@ -85,8 +85,8 @@ comptime hsize_t = c_ulong_long
 """HDF5 dimension size (unsigned 64-bit integer)."""
 comptime htri_t = c_int
 """HDF5 tri-state boolean: > 0 true, 0 false, < 0 error."""
-comptime MutExt = MutExternalOrigin
-"""Shorthand for `MutExternalOrigin`, used for all FFI buffer pointers."""
+comptime MutExt = MutUntrackedOrigin
+"""Shorthand for `MutUntrackedOrigin`, used for all FFI buffer pointers."""
 
 # ===----------------------------------------------------------------------=== #
 # HDF5 constants
