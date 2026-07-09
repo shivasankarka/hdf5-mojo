@@ -16,7 +16,7 @@ backend = {name = "pixi-build-mojo", version = "0.*"}
 [tasks]
 format = "mojo format hdf5 && mojo format examples && mojo format tests"
 package = "mojo precompile hdf5"
-demo = "mojo package hdf5 && mojo run -I ./ -I ./examples examples/demo_api.mojo"
+demo = "mojo precompile hdf5 && mojo run -I ./ -I ./examples examples/demo_api.mojo"
 tests = "sh ./tests/tests.sh && rm ./tests/*.h5"
 
 [dependencies]
