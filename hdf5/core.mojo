@@ -455,7 +455,9 @@ struct Dataset[
         """
         var new_shape = self._shape.copy()
         if len(new_shape) == 0:
-            raise Error("Dataset: cannot resize scalar dataset '" + self._name + "'")
+            raise Error(
+                "Dataset: cannot resize scalar dataset '" + self._name + "'"
+            )
         new_shape[0] = new_size
         self.resize(new_shape)
 
@@ -472,7 +474,9 @@ struct Dataset[
             Error: If the rank does not match or the resize operation fails.
         """
         if len(new_shape) != len(self._shape):
-            raise Error("Dataset: resize rank mismatch for '" + self._name + "'")
+            raise Error(
+                "Dataset: resize rank mismatch for '" + self._name + "'"
+            )
         var rc = self._lib[].resize_dataset(self._did, new_shape)
         if rc < 0:
             raise Error("Dataset: resize failed for '" + self._name + "'")
@@ -1158,7 +1162,9 @@ struct Group[
         """
         var ndims = len(shape)
         if len(maxshape) != ndims or len(chunks) != ndims:
-            raise Error("create_dataset_chunked: rank mismatch for '" + name + "'")
+            raise Error(
+                "create_dataset_chunked: rank mismatch for '" + name + "'"
+            )
 
         var dims = alloc[hsize_t](ndims)
         var maxdims = alloc[hsize_t](ndims)
@@ -1828,9 +1834,7 @@ struct File(Movable):
         var root = Group[origin_of(self._lib[])](
             self._lib_ptr(), self._fid, "/", is_file=True
         )
-        return root.create_dataset_chunked[dtype](
-            name, shape, maxshape, chunks
-        )
+        return root.create_dataset_chunked[dtype](name, shape, maxshape, chunks)
 
     def create_dataset_with_data[
         dtype: DType
