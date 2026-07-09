@@ -45,5 +45,17 @@ def test_attrs_get_default() raises:
     f2.close()
 
 
+def test_attrs_set_overwrites_existing() raises:
+    print("\nTesting AttributeManager.set overwrites existing attr...")
+    var f = File("tests/test_attrs_overwrite.h5", "w")
+
+    f.attrs().set[DType.int32]("version", Scalar[DType.int32](1))
+    f.attrs().set[DType.int32]("version", Scalar[DType.int32](2))
+    var version = f.attrs().get[DType.int32]("version", Scalar[DType.int32](0))
+    assert_equal(version, Int32(2), "version should be overwritten to 2")
+
+    f.close()
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
