@@ -1104,6 +1104,60 @@ struct HDF5Lib(Movable):
         """Call ``H5Pget_nfilters`` for a dataset creation property list."""
         return Int(self.handle.call["H5Pget_nfilters", c_int](dcpl))
 
+    def get_filter_id(self, dcpl: hid_t, idx: Int) -> Int:
+        """Call ``H5Pget_filter2`` and return the filter id at ``idx``."""
+        var flags = alloc[c_uint](1)
+        var cd_nelmts = alloc[c_ulong_long](1)
+        var cd_values = alloc[c_uint](16)
+        var filter_config = alloc[c_uint](1)
+        var name = alloc[c_char](1)
+        cd_nelmts[0] = c_ulong_long(16)
+        var filter_id = self.handle.call["H5Pget_filter2", c_int](
+            dcpl,
+            c_uint(idx),
+            flags,
+            cd_nelmts,
+            cd_values,
+            c_ulong_long(0),
+            name,
+            filter_config,
+        )
+        flags.free()
+        cd_nelmts.free()
+        cd_values.free()
+        filter_config.free()
+        name.free()
+        return Int(filter_id)
+
+    def get_filter_cd_values(self, dcpl: hid_t, idx: Int) -> List[Int]:
+        """Call ``H5Pget_filter2`` and return filter client-data values."""
+        var result = List[Int]()
+        var flags = alloc[c_uint](1)
+        var cd_nelmts = alloc[c_ulong_long](1)
+        var cd_values = alloc[c_uint](16)
+        var filter_config = alloc[c_uint](1)
+        var name = alloc[c_char](1)
+        cd_nelmts[0] = c_ulong_long(16)
+        var filter_id = self.handle.call["H5Pget_filter2", c_int](
+            dcpl,
+            c_uint(idx),
+            flags,
+            cd_nelmts,
+            cd_values,
+            c_ulong_long(0),
+            name,
+            filter_config,
+        )
+        if filter_id >= 0:
+            for i in range(Int(cd_nelmts[0])):
+                result.append(Int(cd_values[i]))
+        flags.free()
+        cd_nelmts.free()
+        cd_values.free()
+        filter_config.free()
+        name.free()
+        return result^
+
     def set_fill_value(
         self,
         dcpl: hid_t,

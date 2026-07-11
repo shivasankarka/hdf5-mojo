@@ -36,6 +36,9 @@ comptime MutExt = MutUntrackedOrigin
 comptime LibRef[mut: Bool, //, origin: Origin[mut=mut]] = Pointer[
     HDF5Lib, origin
 ]
+comptime H5Z_FILTER_DEFLATE = 1
+comptime H5Z_FILTER_SHUFFLE = 2
+comptime H5Z_FILTER_FLETCHER32 = 3
 
 
 # ===----------------------------------------------------------------------=== #
@@ -439,6 +442,76 @@ struct Dataset[
         var count = self._lib[].get_num_filters(dcpl)
         _ = self._lib[].close_dcpl(dcpl)
         return count
+
+    def filter_ids(self) -> List[Int]:
+        """Get the HDF5 filter ids in the dataset creation pipeline."""
+        var result = List[Int]()
+        var dcpl = self._lib[].get_dcpl(self._did)
+        if dcpl < 0:
+            return result^
+        var count = self._lib[].get_num_filters(dcpl)
+        for i in range(count):
+            var filter_id = self._lib[].get_filter_id(dcpl, i)
+            if filter_id >= 0:
+                result.append(filter_id)
+        _ = self._lib[].close_dcpl(dcpl)
+        return result^
+
+    def filter_names(self) -> List[String]:
+        """Get names for known HDF5 filters in the dataset pipeline."""
+        var result = List[String]()
+        var ids = self.filter_ids()
+        for filter_id in ids:
+            if filter_id == H5Z_FILTER_DEFLATE:
+                result.append("gzip")
+            elif filter_id == H5Z_FILTER_SHUFFLE:
+                result.append("shuffle")
+            elif filter_id == H5Z_FILTER_FLETCHER32:
+                result.append("fletcher32")
+            else:
+                result.append("filter_" + String(filter_id))
+        return result^
+
+    def compression(self) -> String:
+        """Get the compression filter name, or empty string if uncompressed."""
+        var ids = self.filter_ids()
+        for filter_id in ids:
+            if filter_id == H5Z_FILTER_DEFLATE:
+                return "gzip"
+        return ""
+
+    def compression_opts(self) -> Int:
+        """Get gzip compression level, or -1 if gzip is not enabled."""
+        var dcpl = self._lib[].get_dcpl(self._did)
+        if dcpl < 0:
+            return -1
+        var count = self._lib[].get_num_filters(dcpl)
+        for i in range(count):
+            var filter_id = self._lib[].get_filter_id(dcpl, i)
+            if filter_id == H5Z_FILTER_DEFLATE:
+                var cd_values = self._lib[].get_filter_cd_values(dcpl, i)
+                _ = self._lib[].close_dcpl(dcpl)
+                if len(cd_values) > 0:
+                    return cd_values[0]
+                return -1
+        _ = self._lib[].close_dcpl(dcpl)
+        return -1
+
+    def shuffle(self) -> Bool:
+        """Return true when the shuffle filter is enabled."""
+        var ids = self.filter_ids()
+        for filter_id in ids:
+            if filter_id == H5Z_FILTER_SHUFFLE:
+                return True
+        return False
+
+    def fletcher32(self) -> Bool:
+        """Return true when the Fletcher32 checksum filter is enabled."""
+        var ids = self.filter_ids()
+        for filter_id in ids:
+            if filter_id == H5Z_FILTER_FLETCHER32:
+                return True
+        return False
 
     def fillvalue[dtype: DType](self) raises -> Scalar[dtype]:
         """Get the dataset fill value from its creation property list."""

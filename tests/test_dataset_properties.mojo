@@ -157,6 +157,24 @@ def test_dataset_filtered_gzip_shuffle_fletcher32() raises:
         "data", shape, maxshape, chunks, "gzip", 4, True, True
     )
     assert_equal(dset.filter_count(), 3, "should record three filters")
+    assert_equal(dset.compression(), "gzip", "compression should be gzip")
+    assert_equal(dset.compression_opts(), 4, "gzip level should be 4")
+    assert_equal(dset.shuffle(), True, "shuffle should be enabled")
+    assert_equal(dset.fletcher32(), True, "fletcher32 should be enabled")
+
+    var filter_ids = dset.filter_ids()
+    assert_equal(len(filter_ids), 3, "should return three filter ids")
+    assert_equal(filter_ids[0], 2, "shuffle filter should be first")
+    assert_equal(filter_ids[1], 1, "gzip filter should be second")
+    assert_equal(filter_ids[2], 3, "fletcher32 filter should be third")
+
+    var filter_names = dset.filter_names()
+    assert_equal(len(filter_names), 3, "should return three filter names")
+    assert_equal(filter_names[0], "shuffle", "first filter should be shuffle")
+    assert_equal(filter_names[1], "gzip", "second filter should be gzip")
+    assert_equal(
+        filter_names[2], "fletcher32", "third filter should be fletcher32"
+    )
 
     var data = alloc[Int32](8)
     for i in range(8):
@@ -173,6 +191,26 @@ def test_dataset_filtered_gzip_shuffle_fletcher32() raises:
             "filtered dataset should round-trip data",
         )
     readback.free()
+
+    dset.close()
+    f.close()
+
+
+def test_dataset_filter_metadata_empty() raises:
+    print("\nTesting empty filter metadata...")
+    var f = File("tests/test_empty_filter_metadata.h5", "w")
+
+    var shape = List[Int]()
+    shape.append(4)
+    var dset = f.create_dataset[DType.int32]("data", shape)
+
+    assert_equal(dset.filter_count(), 0, "contiguous dataset has no filters")
+    assert_equal(len(dset.filter_ids()), 0, "filter_ids should be empty")
+    assert_equal(len(dset.filter_names()), 0, "filter_names should be empty")
+    assert_equal(dset.compression(), "", "compression should be empty")
+    assert_equal(dset.compression_opts(), -1, "compression opts should be -1")
+    assert_equal(dset.shuffle(), False, "shuffle should be false")
+    assert_equal(dset.fletcher32(), False, "fletcher32 should be false")
 
     dset.close()
     f.close()
