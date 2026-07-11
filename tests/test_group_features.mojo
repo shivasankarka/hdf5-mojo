@@ -17,7 +17,7 @@ def test_group_file_property() raises:
     assert_true(obj.is_group(), "should be a group")
     var grp = obj.group()
     var filename = grp.file()
-    assert_true(len(filename) > 0, "filename should not be empty")
+    assert_true(filename.byte_length() > 0, "filename should not be empty")
     grp.close()
     f2.close()
 
@@ -61,6 +61,26 @@ def test_group_values() raises:
     for n in names:
         print("  -", n)
     f2.close()
+
+
+def test_group_long_member_name_listing() raises:
+    print("\nTesting long group member name listing...")
+    var f = File("tests/test_long_member_names.h5", "w")
+
+    var long_name = String("group_")
+    for _ in range(620):
+        long_name += "x"
+    var grp = f.create_group(long_name)
+    grp.close()
+
+    var names = f.keys()
+    var found = False
+    for name in names:
+        if name == long_name:
+            found = True
+    assert_equal(found, True, "long group name should round-trip in keys()")
+
+    f.close()
 
 
 def test_require_dataset_existing() raises:

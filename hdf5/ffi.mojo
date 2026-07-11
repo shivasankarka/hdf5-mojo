@@ -944,21 +944,34 @@ struct HDF5Lib(Movable):
         Returns:
             The attribute name as a String.
         """
-        var buf_size: Int = 256
-        var buf = alloc[c_char](buf_size)
         var dot = String(".\0")
+        var null_buf: Optional[UnsafePointer[c_char, MutExt]] = None
         var name_len = self.handle.call["H5Aget_name_by_idx", c_ssize_t](
             loc_id,
             dot.unsafe_ptr().bitcast[c_char](),
             c_int(0),
             c_int(0),
             hsize_t(idx),
+            null_buf,
+            c_ulong_long(0),
+            H5P_DEFAULT,
+        )
+        if name_len < 0:
+            return ""
+        var n = Int(name_len)
+        var buf = alloc[c_char](n + 1)
+        name_len = self.handle.call["H5Aget_name_by_idx", c_ssize_t](
+            loc_id,
+            dot.unsafe_ptr().bitcast[c_char](),
+            c_int(0),
+            c_int(0),
+            hsize_t(idx),
             buf,
-            c_ulong_long(buf_size),
+            c_ulong_long(n + 1),
             H5P_DEFAULT,
         )
         var result = ""
-        if name_len > 0:
+        if name_len >= 0:
             result = String(
                 unsafe_from_utf8=Span[Byte](
                     ptr=buf.bitcast[UInt8](), length=Int(name_len)
@@ -982,6 +995,52 @@ struct HDF5Lib(Movable):
             The attribute name.
         """
         return self.get_attr_name_by_idx(loc_id, idx)
+
+    def get_link_name_by_idx(self, loc_id: hid_t, idx: Int) -> String:
+        """Call ``H5Lget_name_by_idx`` to get a child link name by index.
+
+        Args:
+            loc_id: File or group id.
+            idx: Zero-based index.
+
+        Returns:
+            The link name, or an empty string when the index is out of range.
+        """
+        var dot = String(".\0")
+        var null_buf: Optional[UnsafePointer[c_char, MutExt]] = None
+        var name_len = self.handle.call["H5Lget_name_by_idx", c_ssize_t](
+            loc_id,
+            dot.unsafe_ptr().bitcast[c_char](),
+            c_int(0),
+            c_int(0),
+            hsize_t(idx),
+            null_buf,
+            c_ulong_long(0),
+            H5P_DEFAULT,
+        )
+        if name_len < 0:
+            return ""
+        var n = Int(name_len)
+        var buf = alloc[c_char](n + 1)
+        name_len = self.handle.call["H5Lget_name_by_idx", c_ssize_t](
+            loc_id,
+            dot.unsafe_ptr().bitcast[c_char](),
+            c_int(0),
+            c_int(0),
+            hsize_t(idx),
+            buf,
+            c_ulong_long(n + 1),
+            H5P_DEFAULT,
+        )
+        var result = ""
+        if name_len >= 0:
+            result = String(
+                unsafe_from_utf8=Span[Byte](
+                    ptr=buf.bitcast[UInt8](), length=Int(name_len)
+                )
+            )
+        buf.free()
+        return result
 
     # ===------------------------------------------------------------------=== #
     # Dataset properties (chunks, maxshape, resize)
@@ -1025,6 +1084,46 @@ struct HDF5Lib(Movable):
         """Call ``H5Pset_chunk`` on a dataset creation property list."""
         return self.handle.call["H5Pset_chunk", herr_t](
             dcpl, c_int(ndims), chunks
+        )
+
+    def set_deflate(self, dcpl: hid_t, level: Int) -> herr_t:
+        """Call ``H5Pset_deflate`` to enable gzip compression."""
+        return self.handle.call["H5Pset_deflate", herr_t](
+            dcpl, c_uint(level)
+        )
+
+    def set_shuffle(self, dcpl: hid_t) -> herr_t:
+        """Call ``H5Pset_shuffle`` to enable the shuffle filter."""
+        return self.handle.call["H5Pset_shuffle", herr_t](dcpl)
+
+    def set_fletcher32(self, dcpl: hid_t) -> herr_t:
+        """Call ``H5Pset_fletcher32`` to enable Fletcher32 checksums."""
+        return self.handle.call["H5Pset_fletcher32", herr_t](dcpl)
+
+    def get_num_filters(self, dcpl: hid_t) -> Int:
+        """Call ``H5Pget_nfilters`` for a dataset creation property list."""
+        return Int(self.handle.call["H5Pget_nfilters", c_int](dcpl))
+
+    def set_fill_value(
+        self,
+        dcpl: hid_t,
+        type_id: hid_t,
+        value: UnsafePointer[NoneType, MutExt],
+    ) -> herr_t:
+        """Call ``H5Pset_fill_value`` on a dataset creation property list."""
+        return self.handle.call["H5Pset_fill_value", herr_t](
+            dcpl, type_id, value
+        )
+
+    def get_fill_value(
+        self,
+        dcpl: hid_t,
+        type_id: hid_t,
+        value: UnsafePointer[NoneType, MutExt],
+    ) -> herr_t:
+        """Call ``H5Pget_fill_value`` on a dataset creation property list."""
+        return self.handle.call["H5Pget_fill_value", herr_t](
+            dcpl, type_id, value
         )
 
     def get_chunk_dims(self, dcpl: hid_t, ndims: Int) -> List[Int]:

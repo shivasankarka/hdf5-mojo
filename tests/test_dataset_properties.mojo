@@ -84,6 +84,100 @@ def test_dataset_chunked_resize() raises:
     f.close()
 
 
+def test_dataset_fillvalue() raises:
+    print("\nTesting dataset fillvalue...")
+    var f = File("tests/test_fillvalue.h5", "w")
+
+    var shape = List[Int]()
+    shape.append(4)
+    var dset = f.create_dataset[DType.int32]("data", shape, Int32(7))
+
+    assert_equal(
+        dset.fillvalue[DType.int32](), Int32(7), "fillvalue should be 7"
+    )
+
+    var buf = alloc[Int32](4)
+    dset.read[DType.int32](buf, 4)
+    for i in range(4):
+        assert_equal(buf[i], Int32(7), "unwritten data should use fillvalue")
+    buf.free()
+
+    dset.close()
+    f.close()
+
+
+def test_dataset_chunked_fillvalue() raises:
+    print("\nTesting chunked dataset fillvalue...")
+    var f = File("tests/test_chunked_fillvalue.h5", "w")
+
+    var shape = List[Int]()
+    shape.append(3)
+    shape.append(2)
+    var maxshape = List[Int]()
+    maxshape.append(-1)
+    maxshape.append(2)
+    var chunks = List[Int]()
+    chunks.append(2)
+    chunks.append(2)
+
+    var dset = f.create_dataset_chunked[DType.float64](
+        "data", shape, maxshape, chunks, Float64(1.25)
+    )
+
+    assert_equal(
+        dset.fillvalue[DType.float64](),
+        Float64(1.25),
+        "fillvalue should be 1.25",
+    )
+
+    var buf = alloc[Float64](6)
+    dset.read[DType.float64](buf, 6)
+    for i in range(6):
+        assert_equal(
+            buf[i], Float64(1.25), "chunked unwritten data should use fillvalue"
+        )
+    buf.free()
+
+    dset.close()
+    f.close()
+
+
+def test_dataset_filtered_gzip_shuffle_fletcher32() raises:
+    print("\nTesting filtered dataset creation...")
+    var f = File("tests/test_filtered_dataset.h5", "w")
+
+    var shape = List[Int]()
+    shape.append(8)
+    var maxshape = List[Int]()
+    maxshape.append(-1)
+    var chunks = List[Int]()
+    chunks.append(4)
+
+    var dset = f.create_dataset_filtered[DType.int32](
+        "data", shape, maxshape, chunks, "gzip", 4, True, True
+    )
+    assert_equal(dset.filter_count(), 3, "should record three filters")
+
+    var data = alloc[Int32](8)
+    for i in range(8):
+        data[i] = Int32(i * 3)
+    dset.write[DType.int32](data, 8)
+    data.free()
+
+    var readback = alloc[Int32](8)
+    dset.read[DType.int32](readback, 8)
+    for i in range(8):
+        assert_equal(
+            readback[i],
+            Int32(i * 3),
+            "filtered dataset should round-trip data",
+        )
+    readback.free()
+
+    dset.close()
+    f.close()
+
+
 def test_dataset_file_property() raises:
     print("\nTesting Dataset.file property...")
     var f = File("tests/test_file_prop.h5", "w")
@@ -99,7 +193,7 @@ def test_dataset_file_property() raises:
     assert_true(obj.is_dataset(), "should be a dataset")
     var dset = obj.dataset()
     var filename = dset.file()
-    assert_true(len(filename) > 0, "filename should not be empty")
+    assert_true(filename.byte_length() > 0, "filename should not be empty")
     dset.close()
     f2.close()
 

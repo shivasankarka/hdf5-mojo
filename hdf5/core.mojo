@@ -58,6 +58,20 @@ def _hdf5_type_id[dtype: DType](lib: HDF5Lib) raises -> hid_t:
         raise Error("HDF5: unsupported DType")
 
 
+def _dtype_code[dtype: DType]() raises -> Int:
+    """Map a supported Mojo DType to this module's compact dtype code."""
+    comptime if dtype == DType.float64:
+        return 0
+    elif dtype == DType.float32:
+        return 1
+    elif dtype == DType.int32:
+        return 2
+    elif dtype == DType.int64:
+        return 3
+    else:
+        raise Error("HDF5: unsupported DType")
+
+
 # ===----------------------------------------------------------------------=== #
 # AttributeManager
 # ===----------------------------------------------------------------------=== #
@@ -416,6 +430,36 @@ struct Dataset[
         var chunks = self._lib[].get_chunk_dims(dcpl, len(self._shape))
         _ = self._lib[].close_dcpl(dcpl)
         return chunks^
+
+    def filter_count(self) -> Int:
+        """Get the number of filters in the dataset creation pipeline."""
+        var dcpl = self._lib[].get_dcpl(self._did)
+        if dcpl < 0:
+            return -1
+        var count = self._lib[].get_num_filters(dcpl)
+        _ = self._lib[].close_dcpl(dcpl)
+        return count
+
+    def fillvalue[dtype: DType](self) raises -> Scalar[dtype]:
+        """Get the dataset fill value from its creation property list."""
+        var dcpl = self._lib[].get_dcpl(self._did)
+        if dcpl < 0:
+            raise Error("Dataset: H5Dget_create_plist failed")
+        var buf = alloc[Scalar[dtype]](1)
+        var rc = self._lib[].get_fill_value(
+            dcpl,
+            _hdf5_type_id[dtype](self._lib[]),
+            buf.bitcast[NoneType](),
+        )
+        _ = self._lib[].close_dcpl(dcpl)
+        if rc < 0:
+            buf.free()
+            raise Error(
+                "Dataset: H5Pget_fill_value failed for '" + self._name + "'"
+            )
+        var value = buf[0]
+        buf.free()
+        return value
 
     def maxshape(self) -> List[Int]:
         """Get the maximum shape of the dataset.
@@ -889,30 +933,11 @@ struct Group[
 
     def _get_member_names(self) raises -> List[String]:
         var result = List[String]()
-        var idx: hsize_t = 0
-        var dot = String(".\0")
+        var idx = 0
         while True:
-            var buf = alloc[c_char](512)
-            var name_len = self._lib[].handle.call[
-                "H5Lget_name_by_idx", c_ssize_t
-            ](
-                self._gid,
-                dot.unsafe_ptr().bitcast[c_char](),
-                c_int(0),
-                c_int(0),
-                idx,
-                buf,
-                c_ulong_long(512),
-                H5P_DEFAULT,
-            )
-            if name_len < 0:
-                buf.free()
+            var member_name = self._lib[].get_link_name_by_idx(self._gid, idx)
+            if member_name == "":
                 break
-            var n = Int(name_len)
-            var member_name = String(
-                unsafe_from_utf8=Span[Byte](ptr=buf.bitcast[UInt8](), length=n)
-            )
-            buf.free()
             result.append(member_name)
             idx += 1
         return result^
@@ -1118,18 +1143,68 @@ struct Group[
         else:
             full_name = full_name + "/" + name
 
-        var dtype_code: Int = 0
-        comptime if dtype == DType.float64:
-            dtype_code = 0
-        elif dtype == DType.float32:
-            dtype_code = 1
-        elif dtype == DType.int32:
-            dtype_code = 2
-        elif dtype == DType.int64:
-            dtype_code = 3
+        var dtype_code = _dtype_code[dtype]()
 
         return Dataset[Self.origin](
             self._lib, did, shape.copy(), dtype_code, full_name, self._filename
+        )
+
+    def create_dataset[
+        dtype: DType
+    ](
+        self,
+        name: String,
+        shape: List[Int],
+        fillvalue: Scalar[dtype],
+    ) raises -> Dataset[Self.origin]:
+        """Create a dataset with a scalar fill value."""
+        var ndims = len(shape)
+        var dims = alloc[hsize_t](ndims)
+        for i in range(ndims):
+            dims[i] = hsize_t(shape[i])
+        var sid = self._lib[].create_dataspace_nd(ndims, dims)
+        dims.free()
+        if sid < 0:
+            raise Error("create_dataset: H5Screate_simple failed")
+
+        var dcpl = self._lib[].create_dcpl()
+        if dcpl < 0:
+            _ = self._lib[].close_dataspace(sid)
+            raise Error("create_dataset: H5Pcreate failed")
+
+        var tid = _hdf5_type_id[dtype](self._lib[])
+        var buf = alloc[Scalar[dtype]](1)
+        buf[0] = fillvalue
+        var rc = self._lib[].set_fill_value(
+            dcpl, tid, buf.bitcast[NoneType]()
+        )
+        buf.free()
+        if rc < 0:
+            _ = self._lib[].close_dcpl(dcpl)
+            _ = self._lib[].close_dataspace(sid)
+            raise Error("create_dataset: H5Pset_fill_value failed")
+
+        var did = self._lib[].create_dataset_with_dcpl(
+            self._gid, name, tid, sid, dcpl
+        )
+        _ = self._lib[].close_dcpl(dcpl)
+        _ = self._lib[].close_dataspace(sid)
+        if did < 0:
+            raise Error("create_dataset: H5Dcreate2 failed for '" + name + "'")
+
+        var full_name = self._name
+        if full_name == "/":
+            full_name = "/" + name
+        else:
+            full_name = full_name + "/" + name
+
+        return Dataset[Self.origin](
+            self._lib,
+            did,
+            shape.copy(),
+            _dtype_code[dtype](),
+            full_name,
+            self._filename,
         )
 
     def create_dataset_chunked[
@@ -1215,18 +1290,206 @@ struct Group[
         else:
             full_name = full_name + "/" + name
 
-        var dtype_code: Int = 0
-        comptime if dtype == DType.float64:
-            dtype_code = 0
-        elif dtype == DType.float32:
-            dtype_code = 1
-        elif dtype == DType.int32:
-            dtype_code = 2
-        elif dtype == DType.int64:
-            dtype_code = 3
+        var dtype_code = _dtype_code[dtype]()
 
         return Dataset[Self.origin](
             self._lib, did, shape.copy(), dtype_code, full_name, self._filename
+        )
+
+    def create_dataset_chunked[
+        dtype: DType
+    ](
+        self,
+        name: String,
+        shape: List[Int],
+        maxshape: List[Int],
+        chunks: List[Int],
+        fillvalue: Scalar[dtype],
+    ) raises -> Dataset[Self.origin]:
+        """Create a chunked dataset with explicit maxshape and fill value."""
+        var ndims = len(shape)
+        if len(maxshape) != ndims or len(chunks) != ndims:
+            raise Error(
+                "create_dataset_chunked: rank mismatch for '" + name + "'"
+            )
+
+        var dims = alloc[hsize_t](ndims)
+        var maxdims = alloc[hsize_t](ndims)
+        var chunk_dims = alloc[hsize_t](ndims)
+        var unlimited = hsize_t(-1)
+        for i in range(ndims):
+            dims[i] = hsize_t(shape[i])
+            if maxshape[i] < 0:
+                maxdims[i] = unlimited
+            else:
+                maxdims[i] = hsize_t(maxshape[i])
+            chunk_dims[i] = hsize_t(chunks[i])
+
+        var sid = self._lib[].create_dataspace_nd_max(ndims, dims, maxdims)
+        dims.free()
+        maxdims.free()
+        if sid < 0:
+            chunk_dims.free()
+            raise Error("create_dataset_chunked: H5Screate_simple failed")
+
+        var dcpl = self._lib[].create_dcpl()
+        if dcpl < 0:
+            chunk_dims.free()
+            _ = self._lib[].close_dataspace(sid)
+            raise Error("create_dataset_chunked: H5Pcreate failed")
+
+        var rc = self._lib[].set_chunk(dcpl, chunk_dims, ndims)
+        chunk_dims.free()
+        if rc < 0:
+            _ = self._lib[].close_dcpl(dcpl)
+            _ = self._lib[].close_dataspace(sid)
+            raise Error("create_dataset_chunked: H5Pset_chunk failed")
+
+        var tid = _hdf5_type_id[dtype](self._lib[])
+        var buf = alloc[Scalar[dtype]](1)
+        buf[0] = fillvalue
+        rc = self._lib[].set_fill_value(dcpl, tid, buf.bitcast[NoneType]())
+        buf.free()
+        if rc < 0:
+            _ = self._lib[].close_dcpl(dcpl)
+            _ = self._lib[].close_dataspace(sid)
+            raise Error("create_dataset_chunked: H5Pset_fill_value failed")
+
+        var did = self._lib[].create_dataset_with_dcpl(
+            self._gid, name, tid, sid, dcpl
+        )
+        _ = self._lib[].close_dcpl(dcpl)
+        _ = self._lib[].close_dataspace(sid)
+        if did < 0:
+            raise Error(
+                "create_dataset_chunked: H5Dcreate2 failed for '" + name + "'"
+            )
+
+        var full_name = self._name
+        if full_name == "/":
+            full_name = "/" + name
+        else:
+            full_name = full_name + "/" + name
+
+        return Dataset[Self.origin](
+            self._lib,
+            did,
+            shape.copy(),
+            _dtype_code[dtype](),
+            full_name,
+            self._filename,
+        )
+
+    def create_dataset_filtered[
+        dtype: DType
+    ](
+        self,
+        name: String,
+        shape: List[Int],
+        maxshape: List[Int],
+        chunks: List[Int],
+        compression: String,
+        compression_opts: Int,
+        shuffle: Bool,
+        fletcher32: Bool,
+    ) raises -> Dataset[Self.origin]:
+        """Create a chunked dataset with built-in HDF5 filters.
+
+        Supported compression values are ``"gzip"`` and ``""``.
+        """
+        var ndims = len(shape)
+        if len(maxshape) != ndims or len(chunks) != ndims:
+            raise Error(
+                "create_dataset_filtered: rank mismatch for '" + name + "'"
+            )
+        if compression != "" and compression != "gzip":
+            raise Error(
+                "create_dataset_filtered: unsupported compression '"
+                + compression
+                + "'"
+            )
+        if compression_opts < 0 or compression_opts > 9:
+            raise Error("create_dataset_filtered: gzip level must be 0..9")
+
+        var dims = alloc[hsize_t](ndims)
+        var maxdims = alloc[hsize_t](ndims)
+        var chunk_dims = alloc[hsize_t](ndims)
+        var unlimited = hsize_t(-1)
+        for i in range(ndims):
+            dims[i] = hsize_t(shape[i])
+            if maxshape[i] < 0:
+                maxdims[i] = unlimited
+            else:
+                maxdims[i] = hsize_t(maxshape[i])
+            chunk_dims[i] = hsize_t(chunks[i])
+
+        var sid = self._lib[].create_dataspace_nd_max(ndims, dims, maxdims)
+        dims.free()
+        maxdims.free()
+        if sid < 0:
+            chunk_dims.free()
+            raise Error("create_dataset_filtered: H5Screate_simple failed")
+
+        var dcpl = self._lib[].create_dcpl()
+        if dcpl < 0:
+            chunk_dims.free()
+            _ = self._lib[].close_dataspace(sid)
+            raise Error("create_dataset_filtered: H5Pcreate failed")
+
+        var rc = self._lib[].set_chunk(dcpl, chunk_dims, ndims)
+        chunk_dims.free()
+        if rc < 0:
+            _ = self._lib[].close_dcpl(dcpl)
+            _ = self._lib[].close_dataspace(sid)
+            raise Error("create_dataset_filtered: H5Pset_chunk failed")
+
+        if shuffle:
+            rc = self._lib[].set_shuffle(dcpl)
+            if rc < 0:
+                _ = self._lib[].close_dcpl(dcpl)
+                _ = self._lib[].close_dataspace(sid)
+                raise Error("create_dataset_filtered: H5Pset_shuffle failed")
+
+        if compression == "gzip":
+            rc = self._lib[].set_deflate(dcpl, compression_opts)
+            if rc < 0:
+                _ = self._lib[].close_dcpl(dcpl)
+                _ = self._lib[].close_dataspace(sid)
+                raise Error("create_dataset_filtered: H5Pset_deflate failed")
+
+        if fletcher32:
+            rc = self._lib[].set_fletcher32(dcpl)
+            if rc < 0:
+                _ = self._lib[].close_dcpl(dcpl)
+                _ = self._lib[].close_dataspace(sid)
+                raise Error(
+                    "create_dataset_filtered: H5Pset_fletcher32 failed"
+                )
+
+        var tid = _hdf5_type_id[dtype](self._lib[])
+        var did = self._lib[].create_dataset_with_dcpl(
+            self._gid, name, tid, sid, dcpl
+        )
+        _ = self._lib[].close_dcpl(dcpl)
+        _ = self._lib[].close_dataspace(sid)
+        if did < 0:
+            raise Error(
+                "create_dataset_filtered: H5Dcreate2 failed for '" + name + "'"
+            )
+
+        var full_name = self._name
+        if full_name == "/":
+            full_name = "/" + name
+        else:
+            full_name = full_name + "/" + name
+
+        return Dataset[Self.origin](
+            self._lib,
+            did,
+            shape.copy(),
+            _dtype_code[dtype](),
+            full_name,
+            self._filename,
         )
 
     def create_dataset_with_data[
@@ -1818,6 +2081,22 @@ struct File(Movable):
         )
         return root.create_dataset[dtype](name, shape)
 
+    def create_dataset[
+        dtype: DType
+    ](
+        self,
+        name: String,
+        shape: List[Int],
+        fillvalue: Scalar[dtype],
+    ) raises -> Dataset[
+        origin_of(self._lib[])
+    ]:
+        """Create a root-level dataset with a scalar fill value."""
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
+        return root.create_dataset[dtype](name, shape, fillvalue)
+
     def create_dataset_chunked[
         dtype: DType
     ](
@@ -1835,6 +2114,54 @@ struct File(Movable):
             self._lib_ptr(), self._fid, "/", is_file=True
         )
         return root.create_dataset_chunked[dtype](name, shape, maxshape, chunks)
+
+    def create_dataset_chunked[
+        dtype: DType
+    ](
+        self,
+        name: String,
+        shape: List[Int],
+        maxshape: List[Int],
+        chunks: List[Int],
+        fillvalue: Scalar[dtype],
+    ) raises -> Dataset[origin_of(self._lib[])]:
+        """Create a chunked root-level dataset with a scalar fill value."""
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
+        return root.create_dataset_chunked[
+            dtype
+        ](name, shape, maxshape, chunks, fillvalue)
+
+    def create_dataset_filtered[
+        dtype: DType
+    ](
+        self,
+        name: String,
+        shape: List[Int],
+        maxshape: List[Int],
+        chunks: List[Int],
+        compression: String,
+        compression_opts: Int,
+        shuffle: Bool,
+        fletcher32: Bool,
+    ) raises -> Dataset[origin_of(self._lib[])]:
+        """Create a filtered chunked dataset at the root level."""
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
+        return root.create_dataset_filtered[
+            dtype
+        ](
+            name,
+            shape,
+            maxshape,
+            chunks,
+            compression,
+            compression_opts,
+            shuffle,
+            fletcher32,
+        )
 
     def create_dataset_with_data[
         dtype: DType

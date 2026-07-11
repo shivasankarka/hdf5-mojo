@@ -57,5 +57,24 @@ def test_attrs_set_overwrites_existing() raises:
     f.close()
 
 
+def test_attrs_long_name_listing() raises:
+    print("\nTesting long attribute name listing...")
+    var f = File("tests/test_attrs_long_name.h5", "w")
+
+    var long_name = String("attr_")
+    for _ in range(320):
+        long_name += "x"
+    f.attrs().set[DType.int32](long_name, Scalar[DType.int32](7))
+
+    var keys = f.attrs().keys()
+    var found = False
+    for key in keys:
+        if key == long_name:
+            found = True
+    assert_equal(found, True, "long attr name should round-trip in keys()")
+
+    f.close()
+
+
 def main() raises:
     TestSuite.discover_tests[__functions_in_module()]().run()
