@@ -216,6 +216,76 @@ def test_dataset_filter_metadata_empty() raises:
     f.close()
 
 
+def test_dataset_read_hyperslab() raises:
+    print("\nTesting Dataset.read_hyperslab...")
+    var f = File("tests/test_read_hyperslab.h5", "w")
+
+    var shape = List[Int]()
+    shape.append(4)
+    shape.append(5)
+    var data = alloc[Int32](20)
+    for i in range(20):
+        data[i] = Int32(i)
+
+    var dset = f.create_dataset_with_data[DType.int32]("data", shape, data)
+    data.free()
+
+    var start = List[Int]()
+    start.append(1)
+    start.append(2)
+    var count = List[Int]()
+    count.append(2)
+    count.append(2)
+    var buf = alloc[Int32](4)
+
+    dset.read_hyperslab[DType.int32](start, count, buf)
+    assert_equal(buf[0], Int32(7), "first hyperslab value")
+    assert_equal(buf[1], Int32(8), "second hyperslab value")
+    assert_equal(buf[2], Int32(12), "third hyperslab value")
+    assert_equal(buf[3], Int32(13), "fourth hyperslab value")
+    buf.free()
+
+    dset.close()
+    f.close()
+
+
+def test_dataset_write_hyperslab() raises:
+    print("\nTesting Dataset.write_hyperslab...")
+    var f = File("tests/test_write_hyperslab.h5", "w")
+
+    var shape = List[Int]()
+    shape.append(4)
+    shape.append(5)
+    var dset = f.create_dataset[DType.int32]("data", shape, Int32(0))
+
+    var start = List[Int]()
+    start.append(1)
+    start.append(1)
+    var count = List[Int]()
+    count.append(2)
+    count.append(2)
+    var patch = alloc[Int32](4)
+    patch[0] = Int32(11)
+    patch[1] = Int32(12)
+    patch[2] = Int32(21)
+    patch[3] = Int32(22)
+
+    dset.write_hyperslab[DType.int32](start, count, patch)
+    patch.free()
+
+    var readback = alloc[Int32](20)
+    dset.read[DType.int32](readback, 20)
+    assert_equal(readback[6], Int32(11), "written row 1 col 1")
+    assert_equal(readback[7], Int32(12), "written row 1 col 2")
+    assert_equal(readback[11], Int32(21), "written row 2 col 1")
+    assert_equal(readback[12], Int32(22), "written row 2 col 2")
+    assert_equal(readback[0], Int32(0), "unselected values stay unchanged")
+    readback.free()
+
+    dset.close()
+    f.close()
+
+
 def test_dataset_file_property() raises:
     print("\nTesting Dataset.file property...")
     var f = File("tests/test_file_prop.h5", "w")

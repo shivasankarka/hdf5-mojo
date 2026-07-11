@@ -102,6 +102,8 @@ comptime H5P_DEFAULT: hid_t = hid_t(0)
 """Sentinel value for "use the default property list" in HDF5 calls."""
 comptime H5S_ALL: hid_t = hid_t(0)
 """Sentinel value for "select the entire dataspace" in read/write calls."""
+comptime H5S_SELECT_SET: c_int = c_int(0)
+"""Selection operator: replace the current dataspace selection."""
 
 comptime H5I_FILE: c_int = c_int(1)
 """H5I_type_t constant identifying a file object."""
@@ -646,6 +648,71 @@ struct HDF5Lib(Movable):
             mem_type_id,
             H5S_ALL,
             H5S_ALL,
+            H5P_DEFAULT,
+            buf,
+        )
+
+    def select_hyperslab(
+        self,
+        space_id: hid_t,
+        start: UnsafePointer[hsize_t, MutExt],
+        count: UnsafePointer[hsize_t, MutExt],
+        ndims: Int,
+    ) -> herr_t:
+        """Call ``H5Sselect_hyperslab`` with unit stride and block."""
+        var stride = alloc[hsize_t](ndims)
+        var block = alloc[hsize_t](ndims)
+        for i in range(ndims):
+            stride[i] = hsize_t(1)
+            block[i] = hsize_t(1)
+        var rc = self.handle.call["H5Sselect_hyperslab", herr_t](
+            space_id,
+            H5S_SELECT_SET,
+            start,
+            stride,
+            count,
+            block,
+        )
+        stride.free()
+        block.free()
+        return rc
+
+    def write_dataset_selection[
+        origin: MutOrigin, //
+    ](
+        self,
+        did: hid_t,
+        mem_type_id: hid_t,
+        mem_space_id: hid_t,
+        file_space_id: hid_t,
+        buf: UnsafePointer[NoneType, origin],
+    ) -> herr_t:
+        """Call ``H5Dwrite`` with explicit memory and file selections."""
+        return self.handle.call["H5Dwrite", herr_t](
+            did,
+            mem_type_id,
+            mem_space_id,
+            file_space_id,
+            H5P_DEFAULT,
+            buf,
+        )
+
+    def read_dataset_selection[
+        origin: MutOrigin, //
+    ](
+        self,
+        did: hid_t,
+        mem_type_id: hid_t,
+        mem_space_id: hid_t,
+        file_space_id: hid_t,
+        buf: UnsafePointer[NoneType, origin],
+    ) -> herr_t:
+        """Call ``H5Dread`` with explicit memory and file selections."""
+        return self.handle.call["H5Dread", herr_t](
+            did,
+            mem_type_id,
+            mem_space_id,
+            file_space_id,
             H5P_DEFAULT,
             buf,
         )

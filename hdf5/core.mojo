@@ -685,6 +685,135 @@ struct Dataset[
         if rc < 0:
             raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
 
+    def read_hyperslab[
+        dtype: DType
+    ](
+        self,
+        start: List[Int],
+        count: List[Int],
+        buf: UnsafePointer[Scalar[dtype], MutExt],
+    ) raises where (
+        dtype == DType.float64
+        or dtype == DType.float32
+        or dtype == DType.int64
+        or dtype == DType.int32
+    ):
+        """Read a contiguous hyperslab into a compact memory buffer.
+
+        ``start`` and ``count`` must have one entry per dataset dimension.
+        """
+        var ndims = len(self._shape)
+        if len(start) != ndims or len(count) != ndims:
+            raise Error("Dataset: hyperslab rank mismatch for '" + self._name + "'")
+        var start_dims = alloc[hsize_t](ndims)
+        var count_dims = alloc[hsize_t](ndims)
+        for i in range(ndims):
+            if start[i] < 0 or count[i] < 0 or start[i] + count[i] > self._shape[i]:
+                start_dims.free()
+                count_dims.free()
+                raise Error(
+                    "Dataset: hyperslab out of bounds for '" + self._name + "'"
+                )
+            start_dims[i] = hsize_t(start[i])
+            count_dims[i] = hsize_t(count[i])
+
+        var file_space = self._lib[].get_dataset_space(self._did)
+        if file_space < 0:
+            start_dims.free()
+            count_dims.free()
+            raise Error("Dataset: H5Dget_space failed for '" + self._name + "'")
+        var rc = self._lib[].select_hyperslab(
+            file_space, start_dims, count_dims, ndims
+        )
+        start_dims.free()
+        if rc < 0:
+            count_dims.free()
+            _ = self._lib[].close_dataspace(file_space)
+            raise Error(
+                "Dataset: H5Sselect_hyperslab failed for '" + self._name + "'"
+            )
+
+        var mem_space = self._lib[].create_dataspace_nd(ndims, count_dims)
+        count_dims.free()
+        if mem_space < 0:
+            _ = self._lib[].close_dataspace(file_space)
+            raise Error("Dataset: memory dataspace creation failed")
+
+        rc = self._lib[].read_dataset_selection(
+            self._did,
+            _hdf5_type_id[dtype](self._lib[]),
+            mem_space,
+            file_space,
+            buf.bitcast[NoneType](),
+        )
+        _ = self._lib[].close_dataspace(mem_space)
+        _ = self._lib[].close_dataspace(file_space)
+        if rc < 0:
+            raise Error("Dataset: H5Dread hyperslab failed for '" + self._name + "'")
+
+    def write_hyperslab[
+        dtype: DType
+    ](
+        self,
+        start: List[Int],
+        count: List[Int],
+        data: UnsafePointer[Scalar[dtype], MutExt],
+    ) raises where (
+        dtype == DType.float64
+        or dtype == DType.float32
+        or dtype == DType.int64
+        or dtype == DType.int32
+    ):
+        """Write a compact memory buffer into a contiguous hyperslab."""
+        var ndims = len(self._shape)
+        if len(start) != ndims or len(count) != ndims:
+            raise Error("Dataset: hyperslab rank mismatch for '" + self._name + "'")
+        var start_dims = alloc[hsize_t](ndims)
+        var count_dims = alloc[hsize_t](ndims)
+        for i in range(ndims):
+            if start[i] < 0 or count[i] < 0 or start[i] + count[i] > self._shape[i]:
+                start_dims.free()
+                count_dims.free()
+                raise Error(
+                    "Dataset: hyperslab out of bounds for '" + self._name + "'"
+                )
+            start_dims[i] = hsize_t(start[i])
+            count_dims[i] = hsize_t(count[i])
+
+        var file_space = self._lib[].get_dataset_space(self._did)
+        if file_space < 0:
+            start_dims.free()
+            count_dims.free()
+            raise Error("Dataset: H5Dget_space failed for '" + self._name + "'")
+        var rc = self._lib[].select_hyperslab(
+            file_space, start_dims, count_dims, ndims
+        )
+        start_dims.free()
+        if rc < 0:
+            count_dims.free()
+            _ = self._lib[].close_dataspace(file_space)
+            raise Error(
+                "Dataset: H5Sselect_hyperslab failed for '" + self._name + "'"
+            )
+
+        var mem_space = self._lib[].create_dataspace_nd(ndims, count_dims)
+        count_dims.free()
+        if mem_space < 0:
+            _ = self._lib[].close_dataspace(file_space)
+            raise Error("Dataset: memory dataspace creation failed")
+
+        rc = self._lib[].write_dataset_selection(
+            self._did,
+            _hdf5_type_id[dtype](self._lib[]),
+            mem_space,
+            file_space,
+            data.bitcast[NoneType](),
+        )
+        _ = self._lib[].close_dataspace(mem_space)
+        _ = self._lib[].close_dataspace(file_space)
+        if rc < 0:
+            raise Error("Dataset: H5Dwrite hyperslab failed for '" + self._name + "'")
+
     # TODO: Still contains old 1D, 2D code, clean this up.
     def read[
         dtype: DType
