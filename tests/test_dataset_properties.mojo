@@ -453,7 +453,9 @@ def test_scalar_dataset_read_write() raises:
     var obj = f2.get("scalar")
     assert_true(obj.is_dataset(), "scalar should reopen as a dataset")
     var reopened = obj.dataset()
-    assert_equal(len(reopened.shape()), 0, "reopened scalar shape should be empty")
+    assert_equal(
+        len(reopened.shape()), 0, "reopened scalar shape should be empty"
+    )
     assert_equal(
         reopened.read_scalar[DType.int32](),
         Int32(99),

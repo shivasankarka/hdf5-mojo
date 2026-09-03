@@ -175,7 +175,9 @@ struct AttributeManager[
             raise Error("attrs: '" + name + "' not found")
         var buf = unsafe_alloc[Scalar[dtype]](1)
         var rc = self._lib[].read_attr(
-            aid, _hdf5_type_id[dtype](self._lib[]), buf.unsafe_bitcast[NoneType]()
+            aid,
+            _hdf5_type_id[dtype](self._lib[]),
+            buf.unsafe_bitcast[NoneType](),
         )
         _ = self._lib[].close_attr(aid)
         if rc < 0:
@@ -278,7 +280,9 @@ struct AttributeManager[
             return default
         var buf = unsafe_alloc[Scalar[dtype]](1)
         var rc = self._lib[].read_attr(
-            aid, _hdf5_type_id[dtype](self._lib[]), buf.unsafe_bitcast[NoneType]()
+            aid,
+            _hdf5_type_id[dtype](self._lib[]),
+            buf.unsafe_bitcast[NoneType](),
         )
         _ = self._lib[].close_attr(aid)
         if rc < 0:
@@ -686,7 +690,9 @@ struct Dataset[
         if rc < 0:
             raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
 
-    def read_scalar[dtype: DType](self) raises -> Scalar[dtype] where (
+    def read_scalar[
+        dtype: DType
+    ](self) raises -> Scalar[dtype] where (
         dtype == DType.float64
         or dtype == DType.float32
         or dtype == DType.int64
@@ -736,11 +742,17 @@ struct Dataset[
         """
         var ndims = len(self._shape)
         if len(start) != ndims or len(count) != ndims:
-            raise Error("Dataset: hyperslab rank mismatch for '" + self._name + "'")
+            raise Error(
+                "Dataset: hyperslab rank mismatch for '" + self._name + "'"
+            )
         var start_dims = unsafe_alloc[hsize_t](ndims)
         var count_dims = unsafe_alloc[hsize_t](ndims)
         for i in range(ndims):
-            if start[i] < 0 or count[i] < 0 or start[i] + count[i] > self._shape[i]:
+            if (
+                start[i] < 0
+                or count[i] < 0
+                or start[i] + count[i] > self._shape[i]
+            ):
                 start_dims.unsafe_free()
                 count_dims.unsafe_free()
                 raise Error(
@@ -781,7 +793,9 @@ struct Dataset[
         _ = self._lib[].close_dataspace(mem_space)
         _ = self._lib[].close_dataspace(file_space)
         if rc < 0:
-            raise Error("Dataset: H5Dread hyperslab failed for '" + self._name + "'")
+            raise Error(
+                "Dataset: H5Dread hyperslab failed for '" + self._name + "'"
+            )
 
     def write_hyperslab[
         dtype: DType
@@ -799,11 +813,17 @@ struct Dataset[
         """Write a compact memory buffer into a contiguous hyperslab."""
         var ndims = len(self._shape)
         if len(start) != ndims or len(count) != ndims:
-            raise Error("Dataset: hyperslab rank mismatch for '" + self._name + "'")
+            raise Error(
+                "Dataset: hyperslab rank mismatch for '" + self._name + "'"
+            )
         var start_dims = unsafe_alloc[hsize_t](ndims)
         var count_dims = unsafe_alloc[hsize_t](ndims)
         for i in range(ndims):
-            if start[i] < 0 or count[i] < 0 or start[i] + count[i] > self._shape[i]:
+            if (
+                start[i] < 0
+                or count[i] < 0
+                or start[i] + count[i] > self._shape[i]
+            ):
                 start_dims.unsafe_free()
                 count_dims.unsafe_free()
                 raise Error(
@@ -844,16 +864,22 @@ struct Dataset[
         _ = self._lib[].close_dataspace(mem_space)
         _ = self._lib[].close_dataspace(file_space)
         if rc < 0:
-            raise Error("Dataset: H5Dwrite hyperslab failed for '" + self._name + "'")
+            raise Error(
+                "Dataset: H5Dwrite hyperslab failed for '" + self._name + "'"
+            )
 
-    def _slice_count(self, start: List[Int], stop: List[Int]) raises -> List[Int]:
+    def _slice_count(
+        self, start: List[Int], stop: List[Int]
+    ) raises -> List[Int]:
         var ndims = len(self._shape)
         if len(start) != ndims or len(stop) != ndims:
             raise Error("Dataset: slice rank mismatch for '" + self._name + "'")
         var count = List[Int]()
         for i in range(ndims):
             if start[i] < 0 or stop[i] < start[i] or stop[i] > self._shape[i]:
-                raise Error("Dataset: slice out of bounds for '" + self._name + "'")
+                raise Error(
+                    "Dataset: slice out of bounds for '" + self._name + "'"
+                )
             count.append(stop[i] - start[i])
         return count^
 
@@ -918,7 +944,9 @@ struct Dataset[
             buf.unsafe_free()
             return arr^
         else:
-            raise Error("Dataset: unsupported slice rank for '" + self._name + "'")
+            raise Error(
+                "Dataset: unsupported slice rank for '" + self._name + "'"
+            )
 
     def read_slice[
         dtype: DType
@@ -962,7 +990,8 @@ struct Dataset[
         or dtype == DType.int64
         or dtype == DType.int32
     ):
-        """Write a compact buffer into a slice described by Mojo Slice values."""
+        """Write a compact buffer into a slice described by Mojo Slice values.
+        """
         var start = self._slice_starts(slices)
         var stop = self._slice_stops(slices)
         self.write_slice[dtype](start, stop, data)
@@ -1499,7 +1528,7 @@ struct Group[
                 full_name = full_name + "/" + name
             return Group[Self.origin](
                 self._lib, gid, full_name, filename=self._filename
-        )
+            )
         return self.create_group(name)
 
     def _create_dataspace_for_shape(self, shape: List[Int]) -> hid_t:
@@ -1764,7 +1793,9 @@ struct Group[
         var tid = _hdf5_type_id[dtype](self._lib[])
         var buf = unsafe_alloc[Scalar[dtype]](1)
         buf[unsafe_offset=0] = fillvalue
-        rc = self._lib[].set_fill_value(dcpl, tid, buf.unsafe_bitcast[NoneType]())
+        rc = self._lib[].set_fill_value(
+            dcpl, tid, buf.unsafe_bitcast[NoneType]()
+        )
         buf.unsafe_free()
         if rc < 0:
             _ = self._lib[].close_dcpl(dcpl)
@@ -1878,9 +1909,7 @@ struct Group[
             if rc < 0:
                 _ = self._lib[].close_dcpl(dcpl)
                 _ = self._lib[].close_dataspace(sid)
-                raise Error(
-                    "create_dataset_filtered: H5Pset_fletcher32 failed"
-                )
+                raise Error("create_dataset_filtered: H5Pset_fletcher32 failed")
 
         var tid = _hdf5_type_id[dtype](self._lib[])
         var did = self._lib[].create_dataset_with_dcpl(
@@ -2504,9 +2533,7 @@ struct File(Movable):
         name: String,
         shape: List[Int],
         fillvalue: Scalar[dtype],
-    ) raises -> Dataset[
-        origin_of(self._lib[])
-    ]:
+    ) raises -> Dataset[origin_of(self._lib[])]:
         """Create a root-level dataset with a scalar fill value."""
         var root = Group[origin_of(self._lib[])](
             self._lib_ptr(), self._fid, "/", is_file=True
@@ -2563,9 +2590,9 @@ struct File(Movable):
         var root = Group[origin_of(self._lib[])](
             self._lib_ptr(), self._fid, "/", is_file=True
         )
-        return root.create_dataset_chunked[
-            dtype
-        ](name, shape, maxshape, chunks, fillvalue)
+        return root.create_dataset_chunked[dtype](
+            name, shape, maxshape, chunks, fillvalue
+        )
 
     def create_dataset_filtered[
         dtype: DType
@@ -2584,9 +2611,7 @@ struct File(Movable):
         var root = Group[origin_of(self._lib[])](
             self._lib_ptr(), self._fid, "/", is_file=True
         )
-        return root.create_dataset_filtered[
-            dtype
-        ](
+        return root.create_dataset_filtered[dtype](
             name,
             shape,
             maxshape,

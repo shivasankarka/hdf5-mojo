@@ -1160,9 +1160,7 @@ struct HDF5Lib(Movable):
 
     def set_deflate(self, dcpl: hid_t, level: Int) -> herr_t:
         """Call ``H5Pset_deflate`` to enable gzip compression."""
-        return self.handle.call["H5Pset_deflate", herr_t](
-            dcpl, c_uint(level)
-        )
+        return self.handle.call["H5Pset_deflate", herr_t](dcpl, c_uint(level))
 
     def set_shuffle(self, dcpl: hid_t) -> herr_t:
         """Call ``H5Pset_shuffle`` to enable the shuffle filter."""
