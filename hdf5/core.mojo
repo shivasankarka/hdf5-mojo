@@ -27,6 +27,7 @@ from hdf5.ffi import (
     H5I_DATASET,
     H5T_INTEGER,
     H5T_FLOAT,
+    H5T_SGN_NONE,
 )
 from std.memory import OwnedPointer, Pointer
 from std.memory.alloc import unsafe_alloc
@@ -58,6 +59,10 @@ def _hdf5_type_id[dtype: DType](lib: HDF5Lib) raises -> hid_t:
         return lib.native_int32
     elif dtype == DType.int64:
         return lib.handle.get_symbol[hid_t]("H5T_NATIVE_INT64_g").value()[]
+    elif dtype == DType.int8:
+        return lib.native_int8
+    elif dtype == DType.uint8:
+        return lib.native_uint8
     else:
         raise Error("HDF5: unsupported DType")
 
@@ -72,8 +77,40 @@ def _dtype_code[dtype: DType]() raises -> Int:
         return 2
     elif dtype == DType.int64:
         return 3
+    elif dtype == DType.int8:
+        return 4
+    elif dtype == DType.uint8:
+        return 5
     else:
         raise Error("HDF5: unsupported DType")
+
+
+def _infer_dtype_code(
+    lib: HDF5Lib, tid: hid_t, tclass: c_int, tsize: Int
+) -> Int:
+    """Infer this module's compact dtype code from an on-disk HDF5 type.
+
+    Distinguishes `int8` from `uint8` (both 1-byte integers) via
+    `H5Tget_sign`. Types outside the currently supported set fall back to
+    the `float64` code; callers that need strict validation should check
+    `Dataset.dtype()` against the expected string.
+    """
+    if tclass == H5T_FLOAT:
+        if tsize == 8:
+            return 0
+        elif tsize == 4:
+            return 1
+    elif tclass == H5T_INTEGER:
+        if tsize == 4:
+            return 2
+        elif tsize == 8:
+            return 3
+        elif tsize == 1:
+            if lib.get_type_sign(tid) == H5T_SGN_NONE:
+                return 5
+            else:
+                return 4
+    return 0
 
 
 # ===----------------------------------------------------------------------=== #
@@ -397,7 +434,8 @@ struct Dataset[
         """Get the HDF5 datatype as a string.
 
         Returns:
-            One of: "float64", "float32", "int32", "int64", "unknown".
+            One of: "float64", "float32", "int32", "int64", "int8",
+            "uint8", "unknown".
         """
         if self._dtype_code == 0:
             return "float64"
@@ -407,6 +445,10 @@ struct Dataset[
             return "int32"
         elif self._dtype_code == 3:
             return "int64"
+        elif self._dtype_code == 4:
+            return "int8"
+        elif self._dtype_code == 5:
+            return "uint8"
         else:
             return "unknown"
 
@@ -638,6 +680,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Read dataset data into a pre-allocated buffer.
 
@@ -669,6 +713,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Write data from a buffer into the dataset.
 
@@ -697,6 +743,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Read a scalar dataset value."""
         if len(self._shape) != 0:
@@ -714,6 +762,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Write a scalar dataset value."""
         if len(self._shape) != 0:
@@ -722,6 +772,45 @@ struct Dataset[
         buf[unsafe_offset=0] = value
         self.write[dtype](buf, 1)
         buf.unsafe_free()
+
+    def __getitem__[
+        dtype: DType
+    ](self, index: Tuple[]) raises -> Scalar[dtype] where (
+        dtype == DType.float64
+        or dtype == DType.float32
+        or dtype == DType.int64
+        or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
+    ):
+        """Read a scalar dataset value via h5py-style empty-tuple indexing.
+
+        Mirrors ``h5py``'s ``dset[()]`` for scalar datasets.
+
+        Args:
+            index: Must be the empty tuple `()`.
+        """
+        return self.read_scalar[dtype]()
+
+    def __setitem__[
+        dtype: DType
+    ](mut self, index: Tuple[], value: Scalar[dtype]) raises where (
+        dtype == DType.float64
+        or dtype == DType.float32
+        or dtype == DType.int64
+        or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
+    ):
+        """Write a scalar dataset value via h5py-style empty-tuple indexing.
+
+        Mirrors ``h5py``'s ``dset[()] = value`` for scalar datasets.
+
+        Args:
+            index: Must be the empty tuple `()`.
+            value: The scalar value to write.
+        """
+        self.write_scalar[dtype](value)
 
     def read_hyperslab[
         dtype: DType
@@ -735,6 +824,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Read a contiguous hyperslab into a compact memory buffer.
 
@@ -809,6 +900,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Write a compact memory buffer into a contiguous hyperslab."""
         var ndims = len(self._shape)
@@ -920,6 +1013,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Read a simple rectangular slice into a compact NDArray."""
         var count = self._slice_count(start, stop)
@@ -955,6 +1050,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Read a simple rectangular slice described by Mojo Slice values."""
         var start = self._slice_starts(slices)
@@ -973,6 +1070,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Write a compact buffer into a simple rectangular slice."""
         var count = self._slice_count(start, stop)
@@ -989,6 +1088,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Write a compact buffer into a slice described by Mojo Slice values.
         """
@@ -1003,6 +1104,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Read a single scalar value at integer indices."""
         var ndims = len(self._shape)
@@ -1024,6 +1127,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Write a single scalar value at integer indices."""
         var ndims = len(self._shape)
@@ -1045,6 +1150,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Read the entire dataset into an NDArray.
         Uses NuMojo NDArray for heap-allocated array storage.
@@ -1097,6 +1204,8 @@ struct Dataset[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Write entire NDArray contents to the dataset.
 
@@ -1274,6 +1383,29 @@ struct Group[
         """
         return self.__getitem__(member_name)
 
+    def get_opt(
+        self, member_name: String
+    ) raises -> Optional[H5Object[Self.origin]]:
+        """Get a member by name without raising if it is absent.
+
+        Mirrors the fallback behavior of ``h5py.Group.get(name,
+        default=...)``: unlike `get`/`__getitem__`, this returns `None`
+        instead of raising when `member_name` does not exist.
+
+        Args:
+            member_name: Name of the member to retrieve.
+
+        Returns:
+            `Some(H5Object)` if the member exists, `None` otherwise.
+
+        Raises:
+            Error: If the member exists but cannot be opened.
+        """
+        if not self.__contains__(member_name):
+            var empty: Optional[H5Object[Self.origin]] = None
+            return empty^
+        return self.__getitem__(member_name)
+
     def delete(self, member_name: String) raises:
         """Delete a member (group or dataset).
 
@@ -1425,19 +1557,8 @@ struct Group[
         var tid = self._lib[].get_dataset_type(did)
         var tclass = self._lib[].get_type_class(tid)
         var tsize = Int(self._lib[].get_type_size(tid))
+        var dtype_code = _infer_dtype_code(self._lib[], tid, tclass, tsize)
         _ = self._lib[].close_type(tid)
-
-        var dtype_code: Int = 0
-        if tclass == H5T_FLOAT:
-            if tsize == 8:
-                dtype_code = 0
-            elif tsize == 4:
-                dtype_code = 1
-        elif tclass == H5T_INTEGER:
-            if tsize == 4:
-                dtype_code = 2
-            elif tsize == 8:
-                dtype_code = 3
 
         var full_name = self._name
         if full_name == "/":
@@ -1645,6 +1766,8 @@ struct Group[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Create a scalar dataset and write its single value."""
         var shape = List[Int]()
@@ -1949,6 +2072,8 @@ struct Group[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Create a dataset and write data to it.
 
@@ -1985,6 +2110,8 @@ struct Group[
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Create a dataset and write data from NuMojo NDArray.
 
@@ -2057,19 +2184,8 @@ struct Group[
         var tid = self._lib[].get_dataset_type(did)
         var tclass = self._lib[].get_type_class(tid)
         var tsize = Int(self._lib[].get_type_size(tid))
+        var dtype_code = _infer_dtype_code(self._lib[], tid, tclass, tsize)
         _ = self._lib[].close_type(tid)
-
-        var dtype_code: Int = 0
-        if tclass == H5T_FLOAT:
-            if tsize == 8:
-                dtype_code = 0
-            elif tsize == 4:
-                dtype_code = 1
-        elif tclass == H5T_INTEGER:
-            if tsize == 4:
-                dtype_code = 2
-            elif tsize == 8:
-                dtype_code = 3
 
         return Dataset[Self.origin](
             self._lib, did, read_shape, dtype_code, full_name, self._filename
@@ -2342,6 +2458,31 @@ struct File(Movable):
         """
         return self.__getitem__(member_name)
 
+    def get_opt(
+        self, member_name: String
+    ) raises -> Optional[H5Object[origin_of(self._lib[])]]:
+        """Get a member by name at the root level without raising if absent.
+
+        Mirrors the fallback behavior of ``h5py.File.get(name,
+        default=...)``: unlike `get`/`__getitem__`, this returns `None`
+        instead of raising when `member_name` does not exist.
+
+        Args:
+            member_name: Name of the member to retrieve.
+
+        Returns:
+            `Some(H5Object)` if the member exists, `None` otherwise.
+
+        Raises:
+            Error: If the member exists but cannot be opened.
+        """
+        var lib_ref = self._lib_ptr()
+        if not self.__contains__(member_name):
+            var empty: Optional[H5Object[origin_of(lib_ref[])]] = None
+            return empty^
+        _ = lib_ref
+        return self.__getitem__(member_name)
+
     def delete(self, member_name: String) raises:
         """Delete a member at the root level.
 
@@ -2551,6 +2692,8 @@ struct File(Movable):
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Create a scalar dataset at the root level."""
         var root = Group[origin_of(self._lib[])](
@@ -2634,6 +2777,8 @@ struct File(Movable):
         or dtype == DType.float32
         or dtype == DType.int64
         or dtype == DType.int32
+        or dtype == DType.int8
+        or dtype == DType.uint8
     ):
         """Create a dataset at the root level and write data.
 

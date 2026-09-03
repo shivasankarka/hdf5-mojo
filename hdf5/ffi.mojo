@@ -124,6 +124,11 @@ comptime H5T_INTEGER: c_int = c_int(0)
 comptime H5T_FLOAT: c_int = c_int(1)
 """H5T_class_t value for floating-point datatypes."""
 
+comptime H5T_SGN_NONE: c_int = c_int(0)
+"""H5T_sign_t value for unsigned integer datatypes."""
+comptime H5T_SGN_2: c_int = c_int(1)
+"""H5T_sign_t value for two's-complement signed integer datatypes."""
+
 # ===----------------------------------------------------------------------=== #
 # HDF5Lib
 # ===----------------------------------------------------------------------=== #
@@ -154,6 +159,10 @@ struct HDF5Lib(Movable):
     """Predefined type id for `H5T_NATIVE_INT32` (32-bit signed integer / Int32)."""
     var std_i32le: hid_t
     """Predefined type id for `H5T_STD_I32LE` (little-endian 32-bit signed integer)."""
+    var native_int8: hid_t
+    """Predefined type id for `H5T_NATIVE_INT8` (8-bit signed integer / Int8)."""
+    var native_uint8: hid_t
+    """Predefined type id for `H5T_NATIVE_UINT8` (8-bit unsigned integer / UInt8)."""
 
     def __init__(out self) raises:
         """Auto-detect and load the HDF5 library from `$CONDA_PREFIX`.
@@ -202,6 +211,12 @@ struct HDF5Lib(Movable):
             self.std_i32le = self.handle.get_symbol[hid_t](
                 "H5T_STD_I32LE_g"
             ).value()[]
+            self.native_int8 = self.handle.get_symbol[hid_t](
+                "H5T_NATIVE_INT8_g"
+            ).value()[]
+            self.native_uint8 = self.handle.get_symbol[hid_t](
+                "H5T_NATIVE_UINT8_g"
+            ).value()[]
         else:
             raise Error(
                 "HDF5: CONDA_PREFIX not set; cannot determine library path"
@@ -243,6 +258,12 @@ struct HDF5Lib(Movable):
         ).value()[]
         self.std_i32le = self.handle.get_symbol[hid_t](
             "H5T_STD_I32LE_g"
+        ).value()[]
+        self.native_int8 = self.handle.get_symbol[hid_t](
+            "H5T_NATIVE_INT8_g"
+        ).value()[]
+        self.native_uint8 = self.handle.get_symbol[hid_t](
+            "H5T_NATIVE_UINT8_g"
         ).value()[]
 
     @staticmethod
@@ -782,6 +803,19 @@ struct HDF5Lib(Movable):
             The size of the datatype in bytes; 0 on failure.
         """
         return self.handle.call["H5Tget_size", c_ulong_long](tid)
+
+    def get_type_sign(self, tid: hid_t) -> c_int:
+        """Call ``H5Tget_sign`` to query the signedness of an integer datatype.
+
+        Args:
+            tid: An integer datatype id.
+
+        Returns:
+            An `H5T_sign_t` value: ``H5T_SGN_NONE`` (0, unsigned) or
+            ``H5T_SGN_2`` (1, two's-complement signed). Returns < 0 on
+            failure or when `tid` is not an integer type.
+        """
+        return self.handle.call["H5Tget_sign", c_int](tid)
 
     # ===------------------------------------------------------------------=== #
     # Attribute operations

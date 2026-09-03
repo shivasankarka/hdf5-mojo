@@ -465,6 +465,86 @@ def test_scalar_dataset_read_write() raises:
     f2.close()
 
 
+def test_scalar_dataset_tuple_indexing() raises:
+    print("\nTesting scalar dataset empty-tuple indexing...")
+    var f = File("tests/test_scalar_tuple_indexing.h5", "w")
+
+    var dset = f.create_scalar_dataset[DType.int32]("scalar", Int32(0))
+    dset.__setitem__[DType.int32]((), Int32(7))
+    assert_equal(
+        dset.__getitem__[DType.int32](()),
+        Int32(7),
+        "dset[()] should read back the value written via dset[()] = value",
+    )
+    dset.close()
+    f.close()
+
+
+def test_dataset_int8_uint8_round_trip() raises:
+    print("\nTesting int8/uint8 dataset creation and I/O...")
+    var f = File("tests/test_int8_uint8.h5", "w")
+
+    var shape = List[Int]()
+    shape.append(4)
+
+    var i8_dset = f.create_dataset[DType.int8]("i8", shape)
+    assert_equal(i8_dset.dtype(), "int8", "dtype() should report int8")
+
+    var i8_data = alloc[Int8](4)
+    i8_data[0] = Int8(-128)
+    i8_data[1] = Int8(-1)
+    i8_data[2] = Int8(0)
+    i8_data[3] = Int8(127)
+    i8_dset.write[DType.int8](i8_data, 4)
+    i8_data.free()
+
+    var i8_readback = alloc[Int8](4)
+    i8_dset.read[DType.int8](i8_readback, 4)
+    assert_equal(i8_readback[0], Int8(-128), "int8 min value round-trip")
+    assert_equal(i8_readback[1], Int8(-1), "int8 negative value round-trip")
+    assert_equal(i8_readback[3], Int8(127), "int8 max value round-trip")
+    i8_readback.free()
+    i8_dset.close()
+
+    var u8_dset = f.create_dataset[DType.uint8]("u8", shape)
+    assert_equal(u8_dset.dtype(), "uint8", "dtype() should report uint8")
+
+    var u8_data = alloc[UInt8](4)
+    u8_data[0] = UInt8(0)
+    u8_data[1] = UInt8(1)
+    u8_data[2] = UInt8(200)
+    u8_data[3] = UInt8(255)
+    u8_dset.write[DType.uint8](u8_data, 4)
+    u8_data.free()
+
+    var u8_readback = alloc[UInt8](4)
+    u8_dset.read[DType.uint8](u8_readback, 4)
+    assert_equal(u8_readback[0], UInt8(0), "uint8 min value round-trip")
+    assert_equal(u8_readback[2], UInt8(200), "uint8 mid value round-trip")
+    assert_equal(u8_readback[3], UInt8(255), "uint8 max value round-trip")
+    u8_readback.free()
+    u8_dset.close()
+
+    f.close()
+
+    var f2 = File("tests/test_int8_uint8.h5", "r")
+    var i8_obj = f2.get("i8")
+    assert_true(i8_obj.is_dataset(), "reopened i8 should be a dataset")
+    assert_equal(
+        i8_obj.dataset().dtype(),
+        "int8",
+        "reopened dataset should still report int8 (not confused with uint8)",
+    )
+    var u8_obj = f2.get("u8")
+    assert_true(u8_obj.is_dataset(), "reopened u8 should be a dataset")
+    assert_equal(
+        u8_obj.dataset().dtype(),
+        "uint8",
+        "reopened dataset should still report uint8 (not confused with int8)",
+    )
+    f2.close()
+
+
 def test_scalar_dataset_fillvalue() raises:
     print("\nTesting scalar dataset fillvalue...")
     var f = File("tests/test_scalar_fillvalue.h5", "w")

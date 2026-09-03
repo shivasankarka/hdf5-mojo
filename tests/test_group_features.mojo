@@ -1,5 +1,5 @@
 from std.memory import UnsafePointer, alloc
-from std.testing import TestSuite, assert_equal, assert_true
+from std.testing import TestSuite, assert_equal, assert_true, assert_false
 
 from hdf5 import File
 
@@ -111,6 +111,70 @@ def test_require_dataset_new() raises:
     var dset = f.require_dataset[DType.float64]("new_ds", shape)
     assert_equal(dset.shape()[0], 15, "shape should be 15")
     dset.close()
+
+    f.close()
+
+
+def test_group_get_opt() raises:
+    print("\nTesting Group.get_opt(name)...")
+    var f = File("tests/test_group_get_default.h5", "w")
+
+    var g = f.create_group("grp")
+    var shape = List[Int]()
+    shape.append(5)
+    _ = g.create_dataset[DType.float64]("existing", shape)
+
+    var found = g.get_opt("existing")
+    assert_true(found.__bool__(), "existing member should be found")
+    assert_true(found.value().is_dataset(), "existing member is a dataset")
+
+    var missing = g.get_opt("missing")
+    assert_false(missing.__bool__(), "missing member should return None")
+
+    g.close()
+    f.close()
+
+
+def test_file_get_opt() raises:
+    print("\nTesting File.get_opt(name)...")
+    var f = File("tests/test_file_get_default.h5", "w")
+
+    var shape = List[Int]()
+    shape.append(5)
+    _ = f.create_dataset[DType.float64]("existing", shape)
+
+    var found = f.get_opt("existing")
+    assert_true(found.__bool__(), "existing member should be found")
+    assert_true(found.value().is_dataset(), "existing member is a dataset")
+
+    var missing = f.get_opt("missing")
+    assert_false(missing.__bool__(), "missing member should return None")
+
+    f.close()
+
+
+def test_require_dataset_preserves_int8_uint8_dtype() raises:
+    print("\nTesting Group.require_dataset preserves int8/uint8 dtype...")
+    var f = File("tests/test_require_ds_int8_uint8.h5", "w")
+
+    var shape = List[Int]()
+    shape.append(4)
+    _ = f.create_dataset[DType.int8]("i8", shape)
+    _ = f.create_dataset[DType.uint8]("u8", shape)
+
+    var i8_dset = f.require_dataset[DType.int8]("i8", shape)
+    assert_equal(
+        i8_dset.dtype(), "int8", "require_dataset should preserve int8 dtype"
+    )
+    i8_dset.close()
+
+    var u8_dset = f.require_dataset[DType.uint8]("u8", shape)
+    assert_equal(
+        u8_dset.dtype(),
+        "uint8",
+        "require_dataset should preserve uint8 dtype",
+    )
+    u8_dset.close()
 
     f.close()
 
