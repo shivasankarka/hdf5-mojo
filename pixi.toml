@@ -20,7 +20,6 @@ demo = "mojo precompile hdf5 && mojo run -I ./ -I ./examples examples/demo_api.m
 tests = "sh ./tests/tests.sh && rm ./tests/*.h5"
 
 [dependencies]
-mojo = ">=1.0.0b2,<2"
+mojo = ">=1.0.0,<2"
 hdf5 = ">=2.1.0,<3"
-# numojo = { git = "https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo", branch = "main"}
-numojo = { path = "../NuMojo/" }
+numojo = { git = "https://github.com/Mojo-Numerics-and-Algorithms-group/NuMojo", branch = "main"}
