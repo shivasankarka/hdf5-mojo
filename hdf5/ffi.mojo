@@ -32,9 +32,9 @@ Constants
 Notes
 -----
 - All string arguments are converted to null-terminated C strings via
-  `my_string.unsafe_ptr().bitcast[c_char]()`.
-- Data buffer arguments are `UnsafePointer[NoneType, MutExternalOrigin]`;
-  cast a typed pointer with `.bitcast[NoneType]()` before passing.
+  `my_string.unsafe_ptr().unsafe_bitcast[c_char]()`.
+- Data buffer arguments are `Pointer[NoneType, MutExternalOrigin]`;
+  cast a typed pointer with `.unsafe_bitcast[NoneType]()` before passing.
 - Predefined HDF5 type constants (e.g. `H5T_NATIVE_DOUBLE_g`) are resolved
   via `get_symbol` at library load time and stored as fields on `HDF5Lib`.
 
@@ -48,7 +48,7 @@ Low-level round-trip write then read:
     var fid = h5.create_file("out.h5")
     var sid = h5.create_dataspace_1d(100)
     var did = h5.create_dataset(fid, "/data", h5.native_double, sid)
-    _ = h5.write_dataset(did, h5.native_double, buf.bitcast[NoneType]())
+    _ = h5.write_dataset(did, h5.native_double, buf.unsafe_bitcast[NoneType]())
     _ = h5.close_dataset(did)
     _ = h5.close_dataspace(sid)
     _ = h5.close_file(fid)
@@ -63,7 +63,8 @@ from std.ffi import (
     c_char,
     c_ssize_t,
 )
-from std.memory import UnsafePointer
+from std.memory import Pointer
+from std.memory.alloc import unsafe_alloc
 from std.os import getenv
 from std.pathlib import Path, cwd
 from std.sys.info import CompilationTarget
@@ -176,13 +177,13 @@ struct HDF5Lib(Movable):
                     "Unsupported platform; cannot determine library path"
                 )
             self.handle = OwnedDLHandle(libpath)
-            var ptr1: Optional[UnsafePointer[NoneType, MutExt]] = None
-            var ptr2: Optional[UnsafePointer[NoneType, MutExt]] = None
+            var ptr1: Optional[Pointer[NoneType, MutExt]] = None
+            var ptr2: Optional[Pointer[NoneType, MutExt]] = None
             _ = self.handle.call["H5open", herr_t]()
             _ = self.handle.call["H5Eset_auto2", herr_t](
                 hid_t(0),
-                # UnsafePointer[NoneType, MutExt].unsafe_dangling(),
-                # UnsafePointer[NoneType, MutExt].unsafe_dangling(),
+                # Pointer[NoneType, MutExt].unsafe_dangling(),
+                # Pointer[NoneType, MutExt].unsafe_dangling(),
                 ptr1,
                 ptr2,
             )
@@ -219,12 +220,12 @@ struct HDF5Lib(Movable):
         """
         self.handle = OwnedDLHandle(libpath)
         _ = self.handle.call["H5open", herr_t]()
-        var ptr1: Optional[UnsafePointer[NoneType, MutExt]] = None
-        var ptr2: Optional[UnsafePointer[NoneType, MutExt]] = None
+        var ptr1: Optional[Pointer[NoneType, MutExt]] = None
+        var ptr2: Optional[Pointer[NoneType, MutExt]] = None
         _ = self.handle.call["H5Eset_auto2", herr_t](
             hid_t(0),
-            # UnsafePointer[NoneType, MutExt].unsafe_dangling(),
-            # UnsafePointer[NoneType, MutExt].unsafe_dangling(),
+            # Pointer[NoneType, MutExt].unsafe_dangling(),
+            # Pointer[NoneType, MutExt].unsafe_dangling(),
             ptr1,
             ptr2,
         )
@@ -286,7 +287,7 @@ struct HDF5Lib(Movable):
             A valid file id (`hid_t`) on success; < 0 on failure.
         """
         return self.handle.call["H5Fcreate", hid_t](
-            _cstr(path).unsafe_ptr().bitcast[c_char](),
+            _cstr(path).unsafe_ptr().unsafe_bitcast[c_char](),
             flags,
             H5P_DEFAULT,
             H5P_DEFAULT,
@@ -304,7 +305,7 @@ struct HDF5Lib(Movable):
             A valid file id (`hid_t`) on success; < 0 on failure.
         """
         return self.handle.call["H5Fopen", hid_t](
-            _cstr(path).unsafe_ptr().bitcast[c_char](),
+            _cstr(path).unsafe_ptr().unsafe_bitcast[c_char](),
             flags,
             H5P_DEFAULT,
         )
@@ -351,7 +352,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Gopen2", hid_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             H5P_DEFAULT,
         )
 
@@ -367,7 +368,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Gcreate2", hid_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             H5P_DEFAULT,
             H5P_DEFAULT,
             H5P_DEFAULT,
@@ -397,16 +398,16 @@ struct HDF5Lib(Movable):
         Returns:
             A valid dataspace id (`hid_t`) on success; < 0 on failure.
         """
-        var dims = alloc[hsize_t](1)
-        dims[0] = hsize_t(n)
+        var dims = unsafe_alloc[hsize_t](1)
+        dims[unsafe_offset=0] = hsize_t(n)
         var sid = self.handle.call["H5Screate_simple", hid_t](
             c_int(1), dims, dims
         )
-        dims.free()
+        dims.unsafe_free()
         return sid
 
     def create_dataspace_nd(
-        self, ndims: Int, dims: UnsafePointer[hsize_t, MutExt]
+        self, ndims: Int, dims: Pointer[hsize_t, MutExt]
     ) -> hid_t:
         """Call ``H5Screate_simple`` to create a fixed-size N-D dataspace.
 
@@ -426,8 +427,8 @@ struct HDF5Lib(Movable):
     def create_dataspace_nd_max(
         self,
         ndims: Int,
-        dims: UnsafePointer[hsize_t, MutExt],
-        maxdims: UnsafePointer[hsize_t, MutExt],
+        dims: Pointer[hsize_t, MutExt],
+        maxdims: Pointer[hsize_t, MutExt],
     ) -> hid_t:
         """Call ``H5Screate_simple`` with explicit maximum dimensions.
 
@@ -442,6 +443,10 @@ struct HDF5Lib(Movable):
         return self.handle.call["H5Screate_simple", hid_t](
             c_int(ndims), dims, maxdims
         )
+
+    def create_dataspace_scalar(self) -> hid_t:
+        """Call ``H5Screate`` to create a scalar dataspace."""
+        return self.handle.call["H5Screate", hid_t](c_int(0))
 
     def get_dataset_space(self, did: hid_t) -> hid_t:
         """Call ``H5Dget_space`` to retrieve the dataspace of an open dataset.
@@ -468,7 +473,7 @@ struct HDF5Lib(Movable):
 
     def get_space_dims(
         self, sid: hid_t, ndims: Int
-    ) -> UnsafePointer[hsize_t, MutExt]:
+    ) -> Pointer[hsize_t, MutExt]:
         """Call ``H5Sget_simple_extent_dims`` and return a heap-allocated dims array.
 
         Args:
@@ -477,12 +482,12 @@ struct HDF5Lib(Movable):
 
         Returns:
             A heap-allocated array of `ndims` dimension sizes.
-            The caller is responsible for calling `.free()` on the result.
+            The caller is responsible for calling `.unsafe_free()` on the result.
         """
-        var ptr: Optional[UnsafePointer[hsize_t, MutExt]] = None
-        var dims = alloc[hsize_t](ndims)
+        var ptr: Optional[Pointer[hsize_t, MutExt]] = None
+        var dims = unsafe_alloc[hsize_t](ndims)
         _ = self.handle.call["H5Sget_simple_extent_dims", c_int](
-            # sid, dims, UnsafePointer[hsize_t, MutExt].unsafe_dangling()
+            # sid, dims, Pointer[hsize_t, MutExt].unsafe_dangling()
             sid,
             dims,
             ptr,
@@ -491,7 +496,7 @@ struct HDF5Lib(Movable):
 
     def get_space_max_dims(
         self, sid: hid_t, ndims: Int
-    ) -> UnsafePointer[hsize_t, MutExt]:
+    ) -> Pointer[hsize_t, MutExt]:
         """Call ``H5Sget_simple_extent_dims`` and return max dimension sizes.
 
         Args:
@@ -500,16 +505,16 @@ struct HDF5Lib(Movable):
 
         Returns:
             A heap-allocated array of `ndims` maximum dimension sizes.
-            The caller is responsible for calling `.free()` on the result.
+            The caller is responsible for calling `.unsafe_free()` on the result.
         """
-        var dims = alloc[hsize_t](ndims)
-        var maxdims = alloc[hsize_t](ndims)
+        var dims = unsafe_alloc[hsize_t](ndims)
+        var maxdims = unsafe_alloc[hsize_t](ndims)
         _ = self.handle.call["H5Sget_simple_extent_dims", c_int](
             sid,
             dims,
             maxdims,
         )
-        dims.free()
+        dims.unsafe_free()
         return maxdims
 
     def close_dataspace(self, sid: hid_t) -> herr_t:
@@ -544,7 +549,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Dcreate2", hid_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             type_id,
             space_id,
             H5P_DEFAULT,
@@ -563,7 +568,7 @@ struct HDF5Lib(Movable):
         """Call ``H5Dcreate2`` with a dataset creation property list."""
         return self.handle.call["H5Dcreate2", hid_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             type_id,
             space_id,
             H5P_DEFAULT,
@@ -584,7 +589,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Dopen2", hid_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             H5P_DEFAULT,
         )
 
@@ -594,7 +599,7 @@ struct HDF5Lib(Movable):
         self,
         did: hid_t,
         mem_type_id: hid_t,
-        buf: UnsafePointer[NoneType, origin],
+        buf: Pointer[NoneType, origin],
     ) -> herr_t:
         """Call ``H5Dwrite`` to write the entire dataset from a memory buffer.
 
@@ -606,7 +611,7 @@ struct HDF5Lib(Movable):
             mem_type_id: HDF5 type id describing the layout of `buf`,
                 e.g. ``h5.native_double`` for a buffer of `Float64`.
             buf: Source data buffer. Cast a typed pointer via
-                `my_ptr.bitcast[NoneType]()` before passing.
+                `my_ptr.unsafe_bitcast[NoneType]()` before passing.
 
         Returns:
             ≥ 0 on success; < 0 on failure.
@@ -626,7 +631,7 @@ struct HDF5Lib(Movable):
         self,
         did: hid_t,
         mem_type_id: hid_t,
-        buf: UnsafePointer[NoneType, origin],
+        buf: Pointer[NoneType, origin],
     ) -> herr_t:
         """Call ``H5Dread`` to read the entire dataset into a memory buffer.
 
@@ -638,7 +643,7 @@ struct HDF5Lib(Movable):
             mem_type_id: HDF5 type id for the destination buffer layout,
                 e.g. ``h5.native_double`` for a `Float64` buffer.
             buf: Destination buffer, pre-allocated to hold the full dataset.
-                Cast a typed pointer via `my_ptr.bitcast[NoneType]()`.
+                Cast a typed pointer via `my_ptr.unsafe_bitcast[NoneType]()`.
 
         Returns:
             ≥ 0 on success; < 0 on failure.
@@ -655,16 +660,16 @@ struct HDF5Lib(Movable):
     def select_hyperslab(
         self,
         space_id: hid_t,
-        start: UnsafePointer[hsize_t, MutExt],
-        count: UnsafePointer[hsize_t, MutExt],
+        start: Pointer[hsize_t, MutExt],
+        count: Pointer[hsize_t, MutExt],
         ndims: Int,
     ) -> herr_t:
         """Call ``H5Sselect_hyperslab`` with unit stride and block."""
-        var stride = alloc[hsize_t](ndims)
-        var block = alloc[hsize_t](ndims)
+        var stride = unsafe_alloc[hsize_t](ndims)
+        var block = unsafe_alloc[hsize_t](ndims)
         for i in range(ndims):
-            stride[i] = hsize_t(1)
-            block[i] = hsize_t(1)
+            stride[unsafe_offset=i] = hsize_t(1)
+            block[unsafe_offset=i] = hsize_t(1)
         var rc = self.handle.call["H5Sselect_hyperslab", herr_t](
             space_id,
             H5S_SELECT_SET,
@@ -673,8 +678,8 @@ struct HDF5Lib(Movable):
             count,
             block,
         )
-        stride.free()
-        block.free()
+        stride.unsafe_free()
+        block.unsafe_free()
         return rc
 
     def write_dataset_selection[
@@ -685,7 +690,7 @@ struct HDF5Lib(Movable):
         mem_type_id: hid_t,
         mem_space_id: hid_t,
         file_space_id: hid_t,
-        buf: UnsafePointer[NoneType, origin],
+        buf: Pointer[NoneType, origin],
     ) -> herr_t:
         """Call ``H5Dwrite`` with explicit memory and file selections."""
         return self.handle.call["H5Dwrite", herr_t](
@@ -705,7 +710,7 @@ struct HDF5Lib(Movable):
         mem_type_id: hid_t,
         mem_space_id: hid_t,
         file_space_id: hid_t,
-        buf: UnsafePointer[NoneType, origin],
+        buf: Pointer[NoneType, origin],
     ) -> herr_t:
         """Call ``H5Dread`` with explicit memory and file selections."""
         return self.handle.call["H5Dread", herr_t](
@@ -794,7 +799,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Aopen", hid_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             H5P_DEFAULT,
         )
 
@@ -804,7 +809,7 @@ struct HDF5Lib(Movable):
         self,
         attr_id: hid_t,
         mem_type_id: hid_t,
-        buf: UnsafePointer[NoneType, origin],
+        buf: Pointer[NoneType, origin],
     ) -> herr_t:
         """Call ``H5Aread`` to read an attribute value into a memory buffer.
 
@@ -813,7 +818,7 @@ struct HDF5Lib(Movable):
             mem_type_id: HDF5 type id for the destination buffer,
                 e.g. ``h5.native_double`` to read a `Float64` scalar.
             buf: Destination buffer, sized for one value of `mem_type_id`.
-                Cast via `my_ptr.bitcast[NoneType]()`.
+                Cast via `my_ptr.unsafe_bitcast[NoneType]()`.
 
         Returns:
             ≥ 0 on success; < 0 on failure.
@@ -850,7 +855,7 @@ struct HDF5Lib(Movable):
         """
         var rc = self.handle.call["H5Lexists", htri_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             H5P_DEFAULT,
         )
         return rc > 0
@@ -879,7 +884,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Oopen", hid_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             H5P_DEFAULT,
         )
 
@@ -906,7 +911,7 @@ struct HDF5Lib(Movable):
         name: String,
         mem_type_id: hid_t,
         space_id: hid_t,
-        buf: UnsafePointer[NoneType, origin],
+        buf: Pointer[NoneType, origin],
     ) -> herr_t:
         """Call ``H5Acreate2`` + ``H5Awrite`` to create and write an attribute.
 
@@ -922,7 +927,7 @@ struct HDF5Lib(Movable):
         """
         var aid = self.handle.call["H5Acreate2", hid_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             mem_type_id,
             space_id,
             H5P_DEFAULT,
@@ -943,12 +948,12 @@ struct HDF5Lib(Movable):
         Returns:
             A valid dataspace id on success; < 0 on failure.
         """
-        var dims = alloc[hsize_t](1)
-        dims[0] = hsize_t(n)
+        var dims = unsafe_alloc[hsize_t](1)
+        dims[unsafe_offset=0] = hsize_t(n)
         var sid = self.handle.call["H5Screate_simple", hid_t](
             c_int(1), dims, dims
         )
-        dims.free()
+        dims.unsafe_free()
         return sid
 
     def create_attr_dataspace_scalar(self) -> hid_t:
@@ -957,7 +962,7 @@ struct HDF5Lib(Movable):
         Returns:
             A valid dataspace id on success; < 0 on failure.
         """
-        return self.handle.call["H5Screate", hid_t](c_int(0))
+        return self.create_dataspace_scalar()
 
     def delete_object(self, loc_id: hid_t, name: String) -> herr_t:
         """Call ``H5Ldelete`` to remove a link (dataset, group, etc.).
@@ -971,7 +976,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Ldelete", herr_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             H5P_DEFAULT,
         )
 
@@ -987,7 +992,7 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Adelete", herr_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
         )
 
     def get_num_attrs(self, loc_id: hid_t) -> c_int:
@@ -1012,10 +1017,10 @@ struct HDF5Lib(Movable):
             The attribute name as a String.
         """
         var dot = String(".\0")
-        var null_buf: Optional[UnsafePointer[c_char, MutExt]] = None
+        var null_buf: Optional[Pointer[c_char, MutExt]] = None
         var name_len = self.handle.call["H5Aget_name_by_idx", c_ssize_t](
             loc_id,
-            dot.unsafe_ptr().bitcast[c_char](),
+            dot.unsafe_ptr().unsafe_bitcast[c_char](),
             c_int(0),
             c_int(0),
             hsize_t(idx),
@@ -1026,10 +1031,10 @@ struct HDF5Lib(Movable):
         if name_len < 0:
             return ""
         var n = Int(name_len)
-        var buf = alloc[c_char](n + 1)
+        var buf = unsafe_alloc[c_char](n + 1)
         name_len = self.handle.call["H5Aget_name_by_idx", c_ssize_t](
             loc_id,
-            dot.unsafe_ptr().bitcast[c_char](),
+            dot.unsafe_ptr().unsafe_bitcast[c_char](),
             c_int(0),
             c_int(0),
             hsize_t(idx),
@@ -1041,10 +1046,10 @@ struct HDF5Lib(Movable):
         if name_len >= 0:
             result = String(
                 unsafe_from_utf8=Span[Byte](
-                    ptr=buf.bitcast[UInt8](), length=Int(name_len)
+                    unsafe_ptr=buf.unsafe_bitcast[UInt8](), length=Int(name_len)
                 )
             )
-        buf.free()
+        buf.unsafe_free()
         return result
 
     def get_attr_info_by_idx(
@@ -1074,10 +1079,10 @@ struct HDF5Lib(Movable):
             The link name, or an empty string when the index is out of range.
         """
         var dot = String(".\0")
-        var null_buf: Optional[UnsafePointer[c_char, MutExt]] = None
+        var null_buf: Optional[Pointer[c_char, MutExt]] = None
         var name_len = self.handle.call["H5Lget_name_by_idx", c_ssize_t](
             loc_id,
-            dot.unsafe_ptr().bitcast[c_char](),
+            dot.unsafe_ptr().unsafe_bitcast[c_char](),
             c_int(0),
             c_int(0),
             hsize_t(idx),
@@ -1088,10 +1093,10 @@ struct HDF5Lib(Movable):
         if name_len < 0:
             return ""
         var n = Int(name_len)
-        var buf = alloc[c_char](n + 1)
+        var buf = unsafe_alloc[c_char](n + 1)
         name_len = self.handle.call["H5Lget_name_by_idx", c_ssize_t](
             loc_id,
-            dot.unsafe_ptr().bitcast[c_char](),
+            dot.unsafe_ptr().unsafe_bitcast[c_char](),
             c_int(0),
             c_int(0),
             hsize_t(idx),
@@ -1103,10 +1108,10 @@ struct HDF5Lib(Movable):
         if name_len >= 0:
             result = String(
                 unsafe_from_utf8=Span[Byte](
-                    ptr=buf.bitcast[UInt8](), length=Int(name_len)
+                    unsafe_ptr=buf.unsafe_bitcast[UInt8](), length=Int(name_len)
                 )
             )
-        buf.free()
+        buf.unsafe_free()
         return result
 
     # ===------------------------------------------------------------------=== #
@@ -1145,7 +1150,7 @@ struct HDF5Lib(Movable):
     def set_chunk(
         self,
         dcpl: hid_t,
-        chunks: UnsafePointer[hsize_t, MutExt],
+        chunks: Pointer[hsize_t, MutExt],
         ndims: Int,
     ) -> herr_t:
         """Call ``H5Pset_chunk`` on a dataset creation property list."""
@@ -1173,12 +1178,12 @@ struct HDF5Lib(Movable):
 
     def get_filter_id(self, dcpl: hid_t, idx: Int) -> Int:
         """Call ``H5Pget_filter2`` and return the filter id at ``idx``."""
-        var flags = alloc[c_uint](1)
-        var cd_nelmts = alloc[c_ulong_long](1)
-        var cd_values = alloc[c_uint](16)
-        var filter_config = alloc[c_uint](1)
-        var name = alloc[c_char](1)
-        cd_nelmts[0] = c_ulong_long(16)
+        var flags = unsafe_alloc[c_uint](1)
+        var cd_nelmts = unsafe_alloc[c_ulong_long](1)
+        var cd_values = unsafe_alloc[c_uint](16)
+        var filter_config = unsafe_alloc[c_uint](1)
+        var name = unsafe_alloc[c_char](1)
+        cd_nelmts[unsafe_offset=0] = c_ulong_long(16)
         var filter_id = self.handle.call["H5Pget_filter2", c_int](
             dcpl,
             c_uint(idx),
@@ -1189,22 +1194,22 @@ struct HDF5Lib(Movable):
             name,
             filter_config,
         )
-        flags.free()
-        cd_nelmts.free()
-        cd_values.free()
-        filter_config.free()
-        name.free()
+        flags.unsafe_free()
+        cd_nelmts.unsafe_free()
+        cd_values.unsafe_free()
+        filter_config.unsafe_free()
+        name.unsafe_free()
         return Int(filter_id)
 
     def get_filter_cd_values(self, dcpl: hid_t, idx: Int) -> List[Int]:
         """Call ``H5Pget_filter2`` and return filter client-data values."""
         var result = List[Int]()
-        var flags = alloc[c_uint](1)
-        var cd_nelmts = alloc[c_ulong_long](1)
-        var cd_values = alloc[c_uint](16)
-        var filter_config = alloc[c_uint](1)
-        var name = alloc[c_char](1)
-        cd_nelmts[0] = c_ulong_long(16)
+        var flags = unsafe_alloc[c_uint](1)
+        var cd_nelmts = unsafe_alloc[c_ulong_long](1)
+        var cd_values = unsafe_alloc[c_uint](16)
+        var filter_config = unsafe_alloc[c_uint](1)
+        var name = unsafe_alloc[c_char](1)
+        cd_nelmts[unsafe_offset=0] = c_ulong_long(16)
         var filter_id = self.handle.call["H5Pget_filter2", c_int](
             dcpl,
             c_uint(idx),
@@ -1216,20 +1221,20 @@ struct HDF5Lib(Movable):
             filter_config,
         )
         if filter_id >= 0:
-            for i in range(Int(cd_nelmts[0])):
-                result.append(Int(cd_values[i]))
-        flags.free()
-        cd_nelmts.free()
-        cd_values.free()
-        filter_config.free()
-        name.free()
+            for i in range(Int(cd_nelmts[unsafe_offset=0])):
+                result.append(Int(cd_values[unsafe_offset=i]))
+        flags.unsafe_free()
+        cd_nelmts.unsafe_free()
+        cd_values.unsafe_free()
+        filter_config.unsafe_free()
+        name.unsafe_free()
         return result^
 
     def set_fill_value(
         self,
         dcpl: hid_t,
         type_id: hid_t,
-        value: UnsafePointer[NoneType, MutExt],
+        value: Pointer[NoneType, MutExt],
     ) -> herr_t:
         """Call ``H5Pset_fill_value`` on a dataset creation property list."""
         return self.handle.call["H5Pset_fill_value", herr_t](
@@ -1240,7 +1245,7 @@ struct HDF5Lib(Movable):
         self,
         dcpl: hid_t,
         type_id: hid_t,
-        value: UnsafePointer[NoneType, MutExt],
+        value: Pointer[NoneType, MutExt],
     ) -> herr_t:
         """Call ``H5Pget_fill_value`` on a dataset creation property list."""
         return self.handle.call["H5Pget_fill_value", herr_t](
@@ -1258,14 +1263,14 @@ struct HDF5Lib(Movable):
             Chunk dimensions, or an empty list if the dataset is not chunked.
         """
         var result = List[Int]()
-        var dims = alloc[hsize_t](ndims)
+        var dims = unsafe_alloc[hsize_t](ndims)
         var rc = self.handle.call["H5Pget_chunk", c_int](
             dcpl, c_int(ndims), dims
         )
         if rc > 0:
             for i in range(Int(rc)):
-                result.append(Int(dims[i]))
-        dims.free()
+                result.append(Int(dims[unsafe_offset=i]))
+        dims.unsafe_free()
         return result^
 
     def resize_dataset(self, did: hid_t, shape: List[Int]) -> herr_t:
@@ -1278,11 +1283,11 @@ struct HDF5Lib(Movable):
         Returns:
             >= 0 on success; < 0 on failure.
         """
-        var dims = alloc[hsize_t](len(shape))
+        var dims = unsafe_alloc[hsize_t](len(shape))
         for i in range(len(shape)):
-            dims[i] = hsize_t(shape[i])
+            dims[unsafe_offset=i] = hsize_t(shape[i])
         var rc = self.handle.call["H5Dset_extent", herr_t](did, dims)
-        dims.free()
+        dims.unsafe_free()
         return rc
 
     # ===------------------------------------------------------------------=== #
@@ -1309,16 +1314,16 @@ struct HDF5Lib(Movable):
         Returns:
             The filename as a String.
         """
-        var buf = alloc[c_char](512)
+        var buf = unsafe_alloc[c_char](512)
         var len = self.handle.call["H5Fget_name", c_int](fid, buf)
         var result = ""
         if len > 0:
             result = String(
                 unsafe_from_utf8=Span[Byte](
-                    ptr=buf.bitcast[UInt8](), length=Int(len)
+                    unsafe_ptr=buf.unsafe_bitcast[UInt8](), length=Int(len)
                 )
             )
-        buf.free()
+        buf.unsafe_free()
         return result
 
     # ===------------------------------------------------------------------=== #
@@ -1347,24 +1352,24 @@ struct HDF5Lib(Movable):
         """
         var did = self.handle.call["H5Dopen2", hid_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             H5P_DEFAULT,
         )
         if did >= 0:
             return did
         var ndims = len(shape)
-        var dims = alloc[hsize_t](ndims)
+        var dims = unsafe_alloc[hsize_t](ndims)
         for i in range(ndims):
-            dims[i] = hsize_t(shape[i])
+            dims[unsafe_offset=i] = hsize_t(shape[i])
         var sid = self.handle.call["H5Screate_simple", hid_t](
             c_int(ndims), dims, dims
         )
-        dims.free()
+        dims.unsafe_free()
         if sid < 0:
             return hid_t(-1)
         did = self.handle.call["H5Dcreate2", hid_t](
             loc_id,
-            _cstr(name).unsafe_ptr().bitcast[c_char](),
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             dtype,
             sid,
             H5P_DEFAULT,
