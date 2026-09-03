@@ -12,9 +12,16 @@ It has most of the basic features needed for working with datasets (and for my c
 
 - Read/write HDF5 files with h5py-style API
 - Create groups, datasets, and attributes
-- Support for `float64`, `float32`, `int32`, `int64` dtypes
+- Support for `float64`, `float32`, `int32`, `int64`, `int8`, `uint8` dtypes
 - N-D Array reading with `read[dtype]()` (uses NuMojo NDArray in the backend.)
-- `require_group` / `require_dataset` helpers
+- Chunked datasets, resizable (`maxshape`) datasets, and fill values
+- Built-in filters: gzip compression, shuffle, and fletcher32 checksums,
+  plus filter metadata accessors (`compression()`, `shuffle()`, etc.)
+- Hyperslab, slice (`read_slice`/`write_slice`), and point
+  (`read_point`/`write_point`) I/O on datasets
+- Scalar dataset support, including h5py-style `dset[()]` indexing
+- `require_group` / `require_dataset` helpers, `get_opt()` for non-raising
+  lookups
 - Automatic library discovery via pixi
 
 ## Supported DType mappings
@@ -25,6 +32,29 @@ It has most of the basic features needed for working with datasets (and for my c
 | `DType.float32` | `H5T_NATIVE_FLOAT` |
 | `DType.int32` | `H5T_NATIVE_INT32` |
 | `DType.int64` | `H5T_NATIVE_INT64` |
+| `DType.int8` | `H5T_NATIVE_INT8` |
+| `DType.uint8` | `H5T_NATIVE_UINT8` |
+
+## Known limitations
+
+This library covers the dataset/group/attribute workflows needed for the
+particle-physics use case it was built for; it is not yet full h5py parity.
+Notably missing, as of v0.2:
+
+- **Types**: no `int16`, `uint16`, `uint32`, `uint64`, `bool`, or string
+  (fixed- or variable-length) datasets/attributes. No compound, enum,
+  opaque, or reference types.
+- **Indexing**: no fancy indexing or multi-block hyperslab selections;
+  slicing is limited to simple rectangular regions with unit stride.
+- **Links & traversal**: no `visit()`/`visititems()`, no hard/soft/external
+  links, no `move`/`copy`.
+- **File-level features**: no `libver` bounds, alternate file drivers
+  (core/in-memory, family/split), or chunk cache tuning.
+- **Advanced HDF5**: no dimension scales, virtual datasets, SWMR, parallel
+  HDF5/MPI, or object/region references.
+
+If one of these blocks you, please open an issue — it helps prioritize the
+roadmap.
 
 ## Installation
 
