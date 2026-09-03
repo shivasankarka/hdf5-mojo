@@ -45,18 +45,18 @@ backend = {name = "pixi-build-mojo", version = "0.*"}
 name = "your_package_name"
 
 [package.host-dependencies]
-mojo = = "26.2.*"
+mojo = "==1.0.0"
 
 [package.build-dependencies]
-mojo = = "26.2.*"
+mojo = "==1.0.0"
 hdf5-mojo = { git = "https://github.com/shivasankarka/hdf5-mojo.git", branch = "main"}
 
 [package.run-dependencies]
-mojo = = "26.2.*"
+mojo = "==1.0.0"
 hdf5-mojo = { git = "https://github.com/shivasankarka/hdf5-mojo.git", branch = "main"}
 
 [dependencies]
-mojo = ">=0.26.2.0,<0.27"
+mojo = ">=1.0.0,<2"
 hdf5-mojo = { git = "https://github.com/shivasankarka/hdf5-mojo.git", branch = "main"}
 ```
 
