@@ -4,9 +4,13 @@ High-level HDF5 bindings for Mojo: Read and write HDF5 files using an h5py-compa
 
 ## Overview
 
-I'm working on porting some particle physics simulation libraries to Mojo. Since HDF5 is widely used there, I wrote these bindings to make it easier to use HDF5 datasets directly from Mojo!
+`hdf5-mojo` wraps the HDF5 C library and exposes it through a high-level, h5py-style API: open/create files, create groups and datasets, read and write array data, and manage attributes, all with Mojo-native types.
 
-It has most of the basic features needed for working with datasets (and for my current projects :) ). Full HDF5 feature parity might come later if I get more free time.
+It covers most of the basic features needed for working with datasets. Full HDF5 feature parity is not a goal yet — see [Known limitations](#known-limitations) for what's missing.
+
+## Motivation
+
+I'm working on porting some particle physics simulation libraries to Mojo. Since HDF5 is widely used there, I wrote these bindings to make it easier to use HDF5 datasets directly from Mojo, and built out the features my own projects needed first. Full HDF5 feature parity might come later if I get more free time.
 
 ## Features
 
