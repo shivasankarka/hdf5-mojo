@@ -286,6 +286,205 @@ def test_dataset_write_hyperslab() raises:
     f.close()
 
 
+def test_dataset_read_write_point() raises:
+    print("\nTesting Dataset point reads and writes...")
+    var f = File("tests/test_dataset_points.h5", "w")
+
+    var shape1 = List[Int]()
+    shape1.append(5)
+    var data1 = alloc[Int32](5)
+    for i in range(5):
+        data1[i] = Int32(i + 10)
+    var dset1 = f.create_dataset_with_data[DType.int32]("one_d", shape1, data1)
+    data1.free()
+
+    var idx1 = List[Int]()
+    idx1.append(2)
+    assert_equal(
+        dset1.read_point[DType.int32](idx1),
+        Int32(12),
+        "1D point read should return selected value",
+    )
+    dset1.write_point[DType.int32](idx1, Int32(99))
+    assert_equal(
+        dset1.read_point[DType.int32](idx1),
+        Int32(99),
+        "1D point write should update selected value",
+    )
+    dset1.close()
+
+    var shape2 = List[Int]()
+    shape2.append(3)
+    shape2.append(4)
+    var data2 = alloc[Int32](12)
+    for i in range(12):
+        data2[i] = Int32(i)
+    var dset2 = f.create_dataset_with_data[DType.int32]("two_d", shape2, data2)
+    data2.free()
+
+    var idx2 = List[Int]()
+    idx2.append(1)
+    idx2.append(2)
+    assert_equal(
+        dset2.read_point[DType.int32](idx2),
+        Int32(6),
+        "2D point read should return selected value",
+    )
+    dset2.write_point[DType.int32](idx2, Int32(77))
+    assert_equal(
+        dset2.read_point[DType.int32](idx2),
+        Int32(77),
+        "2D point write should update selected value",
+    )
+    dset2.close()
+    f.close()
+
+
+def test_dataset_read_write_slice() raises:
+    print("\nTesting Dataset slice reads and writes...")
+    var f = File("tests/test_dataset_slices.h5", "w")
+
+    var shape1 = List[Int]()
+    shape1.append(6)
+    var data1 = alloc[Int32](6)
+    for i in range(6):
+        data1[i] = Int32(i)
+    var dset1 = f.create_dataset_with_data[DType.int32]("one_d", shape1, data1)
+    data1.free()
+
+    var none = Optional[Int]()
+    var slices1 = List[Slice]()
+    slices1.append(Slice(2, 5))
+    var arr1 = dset1.read_slice[DType.int32](slices1)
+    var arr1_ptr = arr1.unsafe_ptr()
+    assert_equal(arr1_ptr[0], Int32(2), "1D slice first value")
+    assert_equal(arr1_ptr[1], Int32(3), "1D slice second value")
+    assert_equal(arr1_ptr[2], Int32(4), "1D slice third value")
+
+    var patch1 = alloc[Int32](3)
+    patch1[0] = Int32(20)
+    patch1[1] = Int32(30)
+    patch1[2] = Int32(40)
+    dset1.write_slice[DType.int32](slices1, patch1)
+    patch1.free()
+    var start1 = List[Int]()
+    start1.append(2)
+    assert_equal(
+        dset1.read_point[DType.int32](start1),
+        Int32(20),
+        "1D slice write should update first selected value",
+    )
+    dset1.close()
+
+    var shape2 = List[Int]()
+    shape2.append(4)
+    shape2.append(5)
+    var data2 = alloc[Int32](20)
+    for i in range(20):
+        data2[i] = Int32(i)
+    var dset2 = f.create_dataset_with_data[DType.int32]("two_d", shape2, data2)
+    data2.free()
+
+    var slices2 = List[Slice]()
+    slices2.append(Slice(1, 3))
+    slices2.append(Slice(Optional[Int](2), none, none))
+    var arr2 = dset2.read_slice[DType.int32](slices2)
+    var arr2_ptr = arr2.unsafe_ptr()
+    assert_equal(arr2_ptr[0], Int32(7), "2D slice first value")
+    assert_equal(arr2_ptr[1], Int32(8), "2D slice second value")
+    assert_equal(arr2_ptr[2], Int32(9), "2D slice third value")
+    assert_equal(arr2_ptr[3], Int32(12), "2D slice fourth value")
+    assert_equal(arr2_ptr[4], Int32(13), "2D slice fifth value")
+    assert_equal(arr2_ptr[5], Int32(14), "2D slice sixth value")
+
+    var patch2 = alloc[Int32](6)
+    patch2[0] = Int32(101)
+    patch2[1] = Int32(102)
+    patch2[2] = Int32(103)
+    patch2[3] = Int32(201)
+    patch2[4] = Int32(202)
+    patch2[5] = Int32(203)
+    dset2.write_slice[DType.int32](slices2, patch2)
+    patch2.free()
+    var start2 = List[Int]()
+    start2.append(1)
+    start2.append(2)
+    assert_equal(
+        dset2.read_point[DType.int32](start2),
+        Int32(101),
+        "2D slice write should update first selected value",
+    )
+    var idx2 = List[Int]()
+    idx2.append(2)
+    idx2.append(4)
+    assert_equal(
+        dset2.read_point[DType.int32](idx2),
+        Int32(203),
+        "2D slice write should update last selected value",
+    )
+
+    dset2.close()
+    f.close()
+
+
+def test_scalar_dataset_read_write() raises:
+    print("\nTesting scalar dataset reads and writes...")
+    var f = File("tests/test_scalar_dataset.h5", "w")
+
+    var dset = f.create_scalar_dataset[DType.int32]("scalar", Int32(42))
+    assert_equal(len(dset.shape()), 0, "scalar dataset shape should be empty")
+    assert_equal(dset.ndim(), 0, "scalar dataset rank should be zero")
+    assert_equal(dset.size(), 1, "scalar dataset size should be one")
+    assert_equal(
+        dset.read_scalar[DType.int32](),
+        Int32(42),
+        "scalar dataset should read initial value",
+    )
+    dset.write_scalar[DType.int32](Int32(99))
+    assert_equal(
+        dset.read_scalar[DType.int32](),
+        Int32(99),
+        "scalar dataset should read updated value",
+    )
+    dset.close()
+    f.close()
+
+    var f2 = File("tests/test_scalar_dataset.h5", "r")
+    var obj = f2.get("scalar")
+    assert_true(obj.is_dataset(), "scalar should reopen as a dataset")
+    var reopened = obj.dataset()
+    assert_equal(len(reopened.shape()), 0, "reopened scalar shape should be empty")
+    assert_equal(
+        reopened.read_scalar[DType.int32](),
+        Int32(99),
+        "reopened scalar dataset should keep updated value",
+    )
+    reopened.close()
+    f2.close()
+
+
+def test_scalar_dataset_fillvalue() raises:
+    print("\nTesting scalar dataset fillvalue...")
+    var f = File("tests/test_scalar_fillvalue.h5", "w")
+
+    var shape = List[Int]()
+    var dset = f.create_dataset[DType.float64]("scalar", shape, Float64(1.5))
+    assert_equal(len(dset.shape()), 0, "scalar fillvalue shape should be empty")
+    assert_equal(
+        dset.fillvalue[DType.float64](),
+        Float64(1.5),
+        "scalar fillvalue metadata should round-trip",
+    )
+    assert_equal(
+        dset.read_scalar[DType.float64](),
+        Float64(1.5),
+        "scalar fillvalue should be used for unwritten data",
+    )
+
+    dset.close()
+    f.close()
+
+
 def test_dataset_file_property() raises:
     print("\nTesting Dataset.file property...")
     var f = File("tests/test_file_prop.h5", "w")
