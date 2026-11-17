@@ -316,7 +316,7 @@ struct AttrValue(Copyable, Movable):
             raise Error("AttrValue: dtype is " + self.dtype)
         if not self.is_scalar():
             raise Error("AttrValue: not a scalar; use as_array()")
-        return self._data.unsafe_ptr().bitcast[Scalar[dtype]]()[0]
+        return self._data.unsafe_ptr().unsafe_bitcast[Scalar[dtype]]()[0]
 
     def as_array[
         dtype: DType
@@ -327,10 +327,10 @@ struct AttrValue(Copyable, Movable):
         if self.is_scalar():
             raise Error("AttrValue: scalar attribute; use as_scalar()")
         var arr = NDArray[dtype](Shape(self.shape))
-        var src = self._data.unsafe_ptr().bitcast[Scalar[dtype]]()
+        var src = self._data.unsafe_ptr().unsafe_bitcast[Scalar[dtype]]()
         var dst = arr.unsafe_ptr()
         for i in range(self.size()):
-            dst[unsafe_offset=i] = src[i]
+            dst[unsafe_offset=i] = src[unsafe_offset=i]
         return arr^
 
 
@@ -2090,7 +2090,7 @@ struct Group[
                 raise Error("create_dataset: H5Pcreate failed")
             var err = String()
             if chunked:
-                var chunk_shape = List[Int]()
+                var chunk_shape: List[Int]
                 if has_chunks:
                     chunk_shape = chunks.copy()
                 else:
