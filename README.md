@@ -70,7 +70,27 @@ roadmap.
 
 ## Installation
 
-Add the following to your `pixi.toml`:
+### From the Modular community channel (recommended)
+
+Add the [Modular community channel](https://repo.prefix.dev/modular-community) to
+the `channels` of your `pixi.toml`:
+
+```toml
+[workspace]
+channels = ["conda-forge", "https://conda.modular.com/max/", "https://repo.prefix.dev/modular-community"]
+```
+
+Then install the package:
+
+```bash
+pixi add hdf5-mojo
+```
+
+This also pulls in `hdf5` and `numojo`, so no further setup is needed.
+
+### From source (git)
+
+To track the latest `main` instead, add the following to your `pixi.toml`:
 
 ```toml
 [workspace]
