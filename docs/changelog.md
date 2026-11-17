@@ -1,5 +1,30 @@
 # Changelog
 
+## v0.3.0
+
+- New dtypes: `int16`, `uint16`, `uint32`, `uint64`, `float16`. Unsigned 32/64-bit
+  datasets are now identified correctly when reopened from disk.
+- `create_dataset` is now h5py-style and takes `fillvalue`, `chunks`, `maxshape`,
+  `compression`, `compression_opts`, `shuffle` and `fletcher32`. Chunk shape is
+  guessed when chunking is implied but `chunks` is omitted.
+  `create_dataset_chunked` / `create_dataset_filtered` remain as thin wrappers.
+- `Dataset.read[dtype]()` and `read_slice` now work for any rank; added
+  `read_direct` / `write_direct` (whole dataset or a `List[Slice]` selection).
+- Array attributes: `read_array`, `write_array`, `shape(name)`, `dtype(name)`,
+  `len(attrs)`. `read_scalar` now raises on array attributes instead of
+  reading past a one-element buffer.
+- `track_order=True` on `File(...)`, `create_group` and `create_dataset`: members and
+  attributes are listed in creation order (default stays name order, like h5py).
+- `for name in file/group/attrs` now works (`__iter__` returns a `NameIterator`;
+  it previously returned a `List`, which Mojo cannot iterate).
+- `AttributeManager.items()`, `values()`, `get_value()` and the type-erased
+  `AttrValue` (`as_scalar[dtype]`, `as_array[dtype]`).
+- `H5Object.group()` / `dataset()` no longer need a mutable receiver.
+- `len(dset)`, `Dataset.nbytes()`, `File.create_dataset_with_data(name, NDArray)`.
+- `File` is now `Copyable` (copies share one open file) and supports
+  `with File(path, mode) as f:`. It closes when the last copy is destroyed, so a
+  forgotten `close()` no longer leaks the handle. `close()` is idempotent.
+
 ## v0.2.0
 
 - Updated methods to be more `h5py` compatible. 
