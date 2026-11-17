@@ -296,23 +296,38 @@ struct HDF5Lib(Movable):
     # File operations
     # ===------------------------------------------------------------------=== #
 
-    def create_file(self, path: String, flags: c_uint = H5F_ACC_TRUNC) -> hid_t:
+    def create_file(
+        self,
+        path: String,
+        flags: c_uint = H5F_ACC_TRUNC,
+        track_order: Bool = False,
+    ) -> hid_t:
         """Call ``H5Fcreate`` to create a new HDF5 file.
 
         Args:
             path: Filesystem path for the new file.
             flags: File-creation flags. Defaults to ``H5F_ACC_TRUNC``,
                 which creates the file or truncates it if it already exists.
+            track_order: Track link and attribute creation order on the root
+                group.
 
         Returns:
             A valid file id (`hid_t`) on success; < 0 on failure.
         """
-        return self.handle.call["H5Fcreate", hid_t](
+        var fcpl = H5P_DEFAULT
+        if track_order:
+            fcpl = self.create_plist("H5P_CLS_FILE_CREATE_ID_g")
+            if fcpl < 0 or not self.set_track_order(fcpl):
+                return hid_t(-1)
+        var fid = self.handle.call["H5Fcreate", hid_t](
             _cstr(path).unsafe_ptr().unsafe_bitcast[c_char](),
             flags,
-            H5P_DEFAULT,
+            fcpl,
             H5P_DEFAULT,
         )
+        if track_order:
+            _ = self.handle.call["H5Pclose", herr_t](fcpl)
+        return fid
 
     def open_file(self, path: String, flags: c_uint = H5F_ACC_RDONLY) -> hid_t:
         """Call ``H5Fopen`` to open an existing HDF5 file.
@@ -377,23 +392,34 @@ struct HDF5Lib(Movable):
             H5P_DEFAULT,
         )
 
-    def create_group(self, loc_id: hid_t, name: String) -> hid_t:
+    def create_group(
+        self, loc_id: hid_t, name: String, track_order: Bool = False
+    ) -> hid_t:
         """Call ``H5Gcreate2`` to create a new group.
 
         Args:
             loc_id: File or parent group id under which to create the group.
             name: Name or path for the new group, e.g. ``"results"``.
+            track_order: Track link and attribute creation order.
 
         Returns:
             A valid group id (`hid_t`) on success; < 0 on failure.
         """
-        return self.handle.call["H5Gcreate2", hid_t](
+        var gcpl = H5P_DEFAULT
+        if track_order:
+            gcpl = self.create_plist("H5P_CLS_GROUP_CREATE_ID_g")
+            if gcpl < 0 or not self.set_track_order(gcpl):
+                return hid_t(-1)
+        var gid = self.handle.call["H5Gcreate2", hid_t](
             loc_id,
             _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
             H5P_DEFAULT,
-            H5P_DEFAULT,
+            gcpl,
             H5P_DEFAULT,
         )
+        if track_order:
+            _ = self.handle.call["H5Pclose", herr_t](gcpl)
+        return gid
 
     def close_group(self, gid: hid_t) -> herr_t:
         """Call ``H5Gclose`` to release a group id.
@@ -973,6 +999,22 @@ struct HDF5Lib(Movable):
         _ = self.handle.call["H5Aclose", herr_t](aid)
         return rc
 
+    def get_attr_space(self, attr_id: hid_t) -> hid_t:
+        """Call ``H5Aget_space`` to retrieve an attribute's dataspace.
+
+        Returns:
+            A dataspace id (close with `close_dataspace`); < 0 on failure.
+        """
+        return self.handle.call["H5Aget_space", hid_t](attr_id)
+
+    def get_attr_type(self, attr_id: hid_t) -> hid_t:
+        """Call ``H5Aget_type`` to retrieve an attribute's datatype.
+
+        Returns:
+            A datatype id (close with `close_type`); < 0 on failure.
+        """
+        return self.handle.call["H5Aget_type", hid_t](attr_id)
+
     def create_attr_dataspace_1d(self, n: Int) -> hid_t:
         """Create a 1-D dataspace for an attribute.
 
@@ -1040,12 +1082,17 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Aget_num_attrs", c_int](loc_id)
 
-    def get_attr_name_by_idx(self, loc_id: hid_t, idx: Int) -> String:
+    def get_attr_name_by_idx(
+        self, loc_id: hid_t, idx: Int, by_creation_order: Bool = False
+    ) -> String:
         """Call ``H5Aget_name_by_idx`` to get an attribute name by index.
 
         Args:
             loc_id: File, group, or dataset id.
             idx: Zero-based index.
+            by_creation_order: Index by creation order (`H5_INDEX_CRT_ORDER`)
+                instead of by name. Fails (returns empty) on objects created
+                without ``track_order``.
 
         Returns:
             The attribute name as a String.
@@ -1055,7 +1102,7 @@ struct HDF5Lib(Movable):
         var name_len = self.handle.call["H5Aget_name_by_idx", c_ssize_t](
             loc_id,
             dot.unsafe_ptr().unsafe_bitcast[c_char](),
-            c_int(0),
+            c_int(1 if by_creation_order else 0),
             c_int(0),
             hsize_t(idx),
             null_buf,
@@ -1069,7 +1116,7 @@ struct HDF5Lib(Movable):
         name_len = self.handle.call["H5Aget_name_by_idx", c_ssize_t](
             loc_id,
             dot.unsafe_ptr().unsafe_bitcast[c_char](),
-            c_int(0),
+            c_int(1 if by_creation_order else 0),
             c_int(0),
             hsize_t(idx),
             buf,
@@ -1102,12 +1149,17 @@ struct HDF5Lib(Movable):
         """
         return self.get_attr_name_by_idx(loc_id, idx)
 
-    def get_link_name_by_idx(self, loc_id: hid_t, idx: Int) -> String:
+    def get_link_name_by_idx(
+        self, loc_id: hid_t, idx: Int, by_creation_order: Bool = False
+    ) -> String:
         """Call ``H5Lget_name_by_idx`` to get a child link name by index.
 
         Args:
             loc_id: File or group id.
             idx: Zero-based index.
+            by_creation_order: Index by creation order (`H5_INDEX_CRT_ORDER`)
+                instead of by name. Fails (returns empty) on objects created
+                without ``track_order``.
 
         Returns:
             The link name, or an empty string when the index is out of range.
@@ -1117,7 +1169,7 @@ struct HDF5Lib(Movable):
         var name_len = self.handle.call["H5Lget_name_by_idx", c_ssize_t](
             loc_id,
             dot.unsafe_ptr().unsafe_bitcast[c_char](),
-            c_int(0),
+            c_int(1 if by_creation_order else 0),
             c_int(0),
             hsize_t(idx),
             null_buf,
@@ -1131,7 +1183,7 @@ struct HDF5Lib(Movable):
         name_len = self.handle.call["H5Lget_name_by_idx", c_ssize_t](
             loc_id,
             dot.unsafe_ptr().unsafe_bitcast[c_char](),
-            c_int(0),
+            c_int(1 if by_creation_order else 0),
             c_int(0),
             hsize_t(idx),
             buf,
@@ -1173,6 +1225,64 @@ struct HDF5Lib(Movable):
             >= 0 on success; < 0 on failure.
         """
         return self.handle.call["H5Pclose", herr_t](dcpl)
+
+    def tracks_creation_order(self, loc_id: hid_t, attrs: Bool) -> Bool:
+        """Whether a file, group or dataset tracks creation order.
+
+        Args:
+            loc_id: File, group, or dataset id.
+            attrs: Check attribute creation order (else link creation order).
+        """
+        var kind = self.handle.call["H5Iget_type", c_int](loc_id)
+        var plist = hid_t(-1)
+        if kind == 1:  # H5I_FILE: ask the root group, which owns the order
+            var root = self.open_group(loc_id, "/")
+            if root >= 0:
+                plist = self.handle.call["H5Gget_create_plist", hid_t](root)
+                _ = self.close_group(root)
+        elif kind == 2:  # H5I_GROUP
+            plist = self.handle.call["H5Gget_create_plist", hid_t](loc_id)
+        elif kind == 5:  # H5I_DATASET
+            plist = self.handle.call["H5Dget_create_plist", hid_t](loc_id)
+        if plist < 0:
+            return False
+        var flags = unsafe_alloc[c_uint](1)
+        flags[unsafe_offset=0] = c_uint(0)
+        var rc = herr_t(-1)
+        if attrs:
+            rc = self.handle.call["H5Pget_attr_creation_order", herr_t](
+                plist, flags
+            )
+        else:
+            rc = self.handle.call["H5Pget_link_creation_order", herr_t](
+                plist, flags
+            )
+        var tracked = rc >= 0 and (flags[unsafe_offset=0] & c_uint(1)) != 0
+        flags.unsafe_free()
+        _ = self.handle.call["H5Pclose", herr_t](plist)
+        return tracked
+
+    def create_plist(self, class_symbol: String) -> hid_t:
+        """Call ``H5Pcreate`` for the property-list class symbol, e.g.
+        ``"H5P_CLS_GROUP_CREATE_ID_g"``. Returns < 0 on failure."""
+        var sym = self.handle.get_symbol[hid_t](class_symbol)
+        if not sym:
+            return hid_t(-1)
+        return self.handle.call["H5Pcreate", hid_t](sym.value()[])
+
+    def set_track_order(self, plist: hid_t) -> Bool:
+        """Enable tracked + indexed link and attribute creation order
+        (``H5Pset_link_creation_order`` / ``H5Pset_attr_creation_order``)
+        on a group, file or dataset creation property list."""
+        var flags = c_uint(3)  # H5P_CRT_ORDER_TRACKED | H5P_CRT_ORDER_INDEXED
+        var rc = self.handle.call["H5Pset_attr_creation_order", herr_t](
+            plist, flags
+        )
+        if rc < 0:
+            return False
+        # Dataset property lists have no link order, so ignore that failure.
+        _ = self.handle.call["H5Pset_link_creation_order", herr_t](plist, flags)
+        return True
 
     def create_dcpl(self) raises -> hid_t:
         """Call ``H5Pcreate(H5P_DATASET_CREATE)``."""

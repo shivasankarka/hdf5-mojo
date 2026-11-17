@@ -29,8 +29,9 @@ from hdf5.ffi import (
     H5T_FLOAT,
     H5T_SGN_NONE,
 )
-from std.memory import OwnedPointer, Pointer
+from std.memory import ArcPointer, OwnedPointer, Pointer
 from std.memory.alloc import unsafe_alloc
+from std.sys import size_of
 from std.utils import Variant
 from numojo import NDArray, Item, Shape
 
@@ -48,7 +49,55 @@ comptime H5Z_FILTER_FLETCHER32 = 3
 # ===----------------------------------------------------------------------=== #
 
 
-# NOTE: Perhaps we should raise here, otherwise there'll be UB.
+comptime SupportedDType[dtype: DType] = (
+    dtype == DType.float64
+    or dtype == DType.float32
+    or dtype == DType.float16
+    or dtype == DType.int64
+    or dtype == DType.int32
+    or dtype == DType.int16
+    or dtype == DType.int8
+    or dtype == DType.uint64
+    or dtype == DType.uint32
+    or dtype == DType.uint16
+    or dtype == DType.uint8
+)
+"""Whether `dtype` is a dtype this library can read/write (for `where`)."""
+
+
+def _guess_chunks(
+    shape: List[Int], maxshape: List[Int], itemsize: Int
+) -> List[Int]:
+    """Guess a chunk shape (<= 1 MiB) when the user did not give one."""
+    var chunks = List[Int]()
+    for i in range(len(shape)):
+        var d = shape[i]
+        if d <= 0:
+            d = 1024 if (len(maxshape) > i and maxshape[i] < 0) else 1
+        chunks.append(d)
+    var limit = 1024 * 1024
+    while True:
+        var nbytes = itemsize
+        var largest = 0
+        for i in range(len(chunks)):
+            nbytes *= chunks[i]
+            if chunks[i] > chunks[largest]:
+                largest = i
+        if nbytes <= limit or chunks[largest] <= 1:
+            break
+        chunks[largest] = (chunks[largest] + 1) // 2
+    return chunks^
+
+
+def _native_type(lib: HDF5Lib, symbol: String) raises -> hid_t:
+    """Resolve a predefined HDF5 type id (e.g. ``H5T_NATIVE_INT16_g``)."""
+    var sym = lib.handle.get_symbol[hid_t](symbol)
+    if not sym:
+        raise Error("HDF5: type symbol not found: " + symbol)
+    return sym.value()[]
+
+
+# TODO: Use enums later in v1.3.0
 def _hdf5_type_id[dtype: DType](lib: HDF5Lib) raises -> hid_t:
     """Map a Mojo DType to the matching HDF5 predefined type id."""
     comptime if dtype == DType.float64:
@@ -58,11 +107,21 @@ def _hdf5_type_id[dtype: DType](lib: HDF5Lib) raises -> hid_t:
     elif dtype == DType.int32:
         return lib.native_int32
     elif dtype == DType.int64:
-        return lib.handle.get_symbol[hid_t]("H5T_NATIVE_INT64_g").value()[]
+        return _native_type(lib, "H5T_NATIVE_INT64_g")
     elif dtype == DType.int8:
         return lib.native_int8
     elif dtype == DType.uint8:
         return lib.native_uint8
+    elif dtype == DType.int16:
+        return _native_type(lib, "H5T_NATIVE_INT16_g")
+    elif dtype == DType.uint16:
+        return _native_type(lib, "H5T_NATIVE_UINT16_g")
+    elif dtype == DType.uint32:
+        return _native_type(lib, "H5T_NATIVE_UINT32_g")
+    elif dtype == DType.uint64:
+        return _native_type(lib, "H5T_NATIVE_UINT64_g")
+    elif dtype == DType.float16:
+        return _native_type(lib, "H5T_IEEE_F16LE_g")
     else:
         raise Error("HDF5: unsupported DType")
 
@@ -81,6 +140,16 @@ def _dtype_code[dtype: DType]() raises -> Int:
         return 4
     elif dtype == DType.uint8:
         return 5
+    elif dtype == DType.int16:
+        return 6
+    elif dtype == DType.uint16:
+        return 7
+    elif dtype == DType.uint32:
+        return 8
+    elif dtype == DType.uint64:
+        return 9
+    elif dtype == DType.float16:
+        return 10
     else:
         raise Error("HDF5: unsupported DType")
 
@@ -90,8 +159,7 @@ def _infer_dtype_code(
 ) -> Int:
     """Infer this module's compact dtype code from an on-disk HDF5 type.
 
-    Distinguishes `int8` from `uint8` (both 1-byte integers) via
-    `H5Tget_sign`. Types outside the currently supported set fall back to
+    Distinguishes signed from unsigned integers via `H5Tget_sign`. Types outside the currently supported set fall back to
     the `float64` code; callers that need strict validation should check
     `Dataset.dtype()` against the expected string.
     """
@@ -100,17 +168,170 @@ def _infer_dtype_code(
             return 0
         elif tsize == 4:
             return 1
+        elif tsize == 2:
+            return 10
     elif tclass == H5T_INTEGER:
+        var unsigned = lib.get_type_sign(tid) == H5T_SGN_NONE
         if tsize == 4:
-            return 2
+            return 8 if unsigned else 2
         elif tsize == 8:
-            return 3
+            return 9 if unsigned else 3
+        elif tsize == 2:
+            return 7 if unsigned else 6
         elif tsize == 1:
-            if lib.get_type_sign(tid) == H5T_SGN_NONE:
-                return 5
-            else:
-                return 4
+            return 5 if unsigned else 4
     return 0
+
+
+def _dtype_name(code: Int) -> String:
+    """Map this module's compact dtype code to its string name."""
+    if code == 0:
+        return "float64"
+    elif code == 1:
+        return "float32"
+    elif code == 2:
+        return "int32"
+    elif code == 3:
+        return "int64"
+    elif code == 4:
+        return "int8"
+    elif code == 5:
+        return "uint8"
+    elif code == 6:
+        return "int16"
+    elif code == 7:
+        return "uint16"
+    elif code == 8:
+        return "uint32"
+    elif code == 9:
+        return "uint64"
+    elif code == 10:
+        return "float16"
+    return "unknown"
+
+
+def _dtype_itemsize(code: Int) -> Int:
+    """Size in bytes of one element of the given compact dtype code."""
+    if code == 0 or code == 3 or code == 9:
+        return 8
+    elif code == 1 or code == 2 or code == 8:
+        return 4
+    elif code == 6 or code == 7 or code == 10:
+        return 2
+    elif code == 4 or code == 5:
+        return 1
+    return 0
+
+
+def _type_id_for_code(lib: HDF5Lib, code: Int) raises -> hid_t:
+    """HDF5 native type id matching a compact dtype code."""
+    if code == 0:
+        return lib.native_double
+    elif code == 1:
+        return lib.native_float
+    elif code == 2:
+        return lib.native_int32
+    elif code == 3:
+        return _native_type(lib, "H5T_NATIVE_INT64_g")
+    elif code == 4:
+        return lib.native_int8
+    elif code == 5:
+        return lib.native_uint8
+    elif code == 6:
+        return _native_type(lib, "H5T_NATIVE_INT16_g")
+    elif code == 7:
+        return _native_type(lib, "H5T_NATIVE_UINT16_g")
+    elif code == 8:
+        return _native_type(lib, "H5T_NATIVE_UINT32_g")
+    elif code == 9:
+        return _native_type(lib, "H5T_NATIVE_UINT64_g")
+    elif code == 10:
+        return _native_type(lib, "H5T_IEEE_F16LE_g")
+    raise Error("HDF5: unsupported dtype")
+
+
+struct NameIterator(Iterator, Movable):
+    """Iterator over member or attribute names (returned by `__iter__`)."""
+
+    comptime Element = String
+
+    var _names: List[String]
+    var _idx: Int
+
+    def __init__(out self, var names: List[String]):
+        self._names = names^
+        self._idx = 0
+
+    def __iter__(var self) -> Self:
+        return self^
+
+    def __next__(mut self) raises StopIteration -> String:
+        if self._idx >= len(self._names):
+            raise StopIteration()
+        self._idx += 1
+        return self._names[self._idx - 1]
+
+
+struct AttrValue(Copyable, Movable):
+    """A type-erased attribute value returned by `AttributeManager.items()`.
+
+    Inspect `dtype` / `shape`, then extract with `as_scalar[dtype]()` or
+    `as_array[dtype]()`; extracting with the wrong dtype raises.
+    """
+
+    var dtype: String
+    """Datatype name, e.g. ``"float64"``."""
+    var shape: List[Int]
+    """Attribute shape (`[]` for a scalar attribute)."""
+    var _code: Int
+    var _data: List[UInt8]
+
+    def __init__(
+        out self,
+        dtype: String,
+        var shape: List[Int],
+        code: Int,
+        var data: List[UInt8],
+    ):
+        self.dtype = dtype
+        self.shape = shape^
+        self._code = code
+        self._data = data^
+
+    def is_scalar(self) -> Bool:
+        return len(self.shape) == 0
+
+    def size(self) -> Int:
+        """Number of elements (1 for a scalar attribute)."""
+        var n = 1
+        for d in self.shape:
+            n *= d
+        return n
+
+    def as_scalar[
+        dtype: DType
+    ](self) raises -> Scalar[dtype] where SupportedDType[dtype]:
+        """The value of a scalar attribute."""
+        if self._code != _dtype_code[dtype]():
+            raise Error("AttrValue: dtype is " + self.dtype)
+        if not self.is_scalar():
+            raise Error("AttrValue: not a scalar; use as_array()")
+        return self._data.unsafe_ptr().bitcast[Scalar[dtype]]()[0]
+
+    def as_array[
+        dtype: DType
+    ](self) raises -> NDArray[dtype] where SupportedDType[dtype]:
+        """The value of an array attribute as an NDArray."""
+        if self._code != _dtype_code[dtype]():
+            raise Error("AttrValue: dtype is " + self.dtype)
+        if self.is_scalar():
+            raise Error("AttrValue: scalar attribute; use as_scalar()")
+        var arr = NDArray[dtype](Shape(self.shape))
+        var src = self._data.unsafe_ptr().bitcast[Scalar[dtype]]()
+        var dst = arr.unsafe_ptr()
+        for i in range(self.size()):
+            dst[unsafe_offset=i] = src[i]
+        return arr^
 
 
 # ===----------------------------------------------------------------------=== #
@@ -122,7 +343,7 @@ struct AttributeManager[
     mut: Bool,
     //,
     origin: Origin[mut=mut],
-](Copyable, Movable):
+](Copyable, Movable, Sized):
     """Dict-like proxy for HDF5 attributes on a Group or Dataset.
 
     Attributes are user-defined metadata attached to HDF5 objects (groups or
@@ -207,6 +428,8 @@ struct AttributeManager[
         Raises:
             Error: If the attribute does not exist or read fails.
         """
+        if len(self.shape(name)) != 0:
+            raise Error("attrs: '" + name + "' is an array; use read_array()")
         var aid = self._lib[].open_attr(self._loc_id, name)
         if aid < 0:
             raise Error("attrs: '" + name + "' not found")
@@ -258,6 +481,157 @@ struct AttributeManager[
         if rc < 0:
             raise Error("attrs: write failed for '" + name + "'")
 
+    def shape(self, name: String) raises -> List[Int]:
+        """Shape of an attribute (`[]` for a scalar attribute)."""
+        var aid = self._lib[].open_attr(self._loc_id, name)
+        if aid < 0:
+            raise Error("attrs: '" + name + "' not found")
+        var sid = self._lib[].get_attr_space(aid)
+        _ = self._lib[].close_attr(aid)
+        if sid < 0:
+            raise Error("attrs: H5Aget_space failed for '" + name + "'")
+        var ndims = Int(self._lib[].get_space_ndims(sid))
+        var result = List[Int]()
+        if ndims > 0:
+            var dims = self._lib[].get_space_dims(sid, ndims)
+            for i in range(ndims):
+                result.append(Int(dims[unsafe_offset=i]))
+            dims.unsafe_free()
+        _ = self._lib[].close_dataspace(sid)
+        return result^
+
+    def _dtype_code_of(self, name: String) raises -> Int:
+        var aid = self._lib[].open_attr(self._loc_id, name)
+        if aid < 0:
+            raise Error("attrs: '" + name + "' not found")
+        var tid = self._lib[].get_attr_type(aid)
+        _ = self._lib[].close_attr(aid)
+        if tid < 0:
+            raise Error("attrs: H5Aget_type failed for '" + name + "'")
+        var code = _infer_dtype_code(
+            self._lib[],
+            tid,
+            self._lib[].get_type_class(tid),
+            Int(self._lib[].get_type_size(tid)),
+        )
+        _ = self._lib[].close_type(tid)
+        return code
+
+    def dtype(self, name: String) raises -> String:
+        """Datatype name of an attribute, e.g. ``"float64"``."""
+        return _dtype_name(self._dtype_code_of(name))
+
+    def get_value(self, name: String) raises -> AttrValue:
+        """Read an attribute of any supported dtype/shape as an `AttrValue`."""
+        var shape = self.shape(name)
+        var code = self._dtype_code_of(name)
+        var n = 1
+        for d in shape:
+            n *= d
+        var nbytes = n * _dtype_itemsize(code)
+        var raw = unsafe_alloc[UInt8](nbytes + 1)
+        var aid = self._lib[].open_attr(self._loc_id, name)
+        if aid < 0:
+            raw.unsafe_free()
+            raise Error("attrs: '" + name + "' not found")
+        var rc = self._lib[].read_attr(
+            aid,
+            _type_id_for_code(self._lib[], code),
+            raw.unsafe_bitcast[NoneType](),
+        )
+        _ = self._lib[].close_attr(aid)
+        var data = List[UInt8](capacity=nbytes)
+        for i in range(nbytes):
+            data.append(raw[unsafe_offset=i])
+        raw.unsafe_free()
+        if rc < 0:
+            raise Error("attrs: H5Aread failed for '" + name + "'")
+        return AttrValue(_dtype_name(code), shape^, code, data^)
+
+    def items(self) raises -> List[Tuple[String, AttrValue]]:
+        """All `(name, value)` pairs, in `keys()` order."""
+        var result = List[Tuple[String, AttrValue]]()
+        for name in self.keys():
+            result.append((name, self.get_value(name)))
+        return result^
+
+    def values(self) raises -> List[AttrValue]:
+        """All attribute values, in `keys()` order."""
+        var result = List[AttrValue]()
+        for name in self.keys():
+            result.append(self.get_value(name))
+        return result^
+
+    def read_array[
+        dtype: DType
+    ](self, name: String) raises -> NDArray[dtype] where SupportedDType[dtype]:
+        """Read an array attribute (rank >= 1) into an NDArray.
+
+        Raises:
+            Error: If the attribute is missing or is a scalar attribute.
+        """
+        var shp = self.shape(name)
+        if len(shp) == 0:
+            raise Error("attrs: '" + name + "' is scalar; use read_scalar()")
+        var arr = NDArray[dtype](Shape(shp))
+        var aid = self._lib[].open_attr(self._loc_id, name)
+        if aid < 0:
+            raise Error("attrs: '" + name + "' not found")
+        var rc = self._lib[].read_attr(
+            aid,
+            _hdf5_type_id[dtype](self._lib[]),
+            arr.unsafe_ptr().unsafe_bitcast[NoneType](),
+        )
+        _ = self._lib[].close_attr(aid)
+        if rc < 0:
+            raise Error("attrs: H5Aread failed for '" + name + "'")
+        return arr^
+
+    def write_array[
+        dtype: DType
+    ](self, name: String, value: NDArray[dtype]) raises where SupportedDType[
+        dtype
+    ]:
+        """Write an NDArray as an array attribute; overwrites an existing one.
+        """
+        var ndims = value.shape.ndim
+        if ndims == 0:
+            raise Error("attrs: write_array needs an array of rank >= 1")
+        if self.__contains__(name):
+            self.delete(name)
+        var dims = unsafe_alloc[hsize_t](ndims)
+        for i in range(ndims):
+            dims[unsafe_offset=i] = hsize_t(value.shape[i])
+        var sid = self._lib[].create_dataspace_nd(ndims, dims)
+        dims.unsafe_free()
+        if sid < 0:
+            raise Error("attrs: dataspace creation failed")
+        var rc = self._lib[].write_attr(
+            self._loc_id,
+            name,
+            _hdf5_type_id[dtype](self._lib[]),
+            sid,
+            value.unsafe_ptr()
+            .unsafe_bitcast[NoneType]()
+            .unsafe_mut_cast[True](),
+        )
+        _ = self._lib[].close_dataspace(sid)
+        if rc < 0:
+            raise Error("attrs: write failed for '" + name + "'")
+
+    def __len__(self) -> Int:
+        """Number of attributes on this object (0 if the query fails)."""
+        var num = self._lib[].get_num_attrs(self._loc_id)
+        return Int(num) if num > 0 else 0
+
+    def len(self) -> Int:
+        """Number of attributes on this object."""
+        return self.__len__()
+
+    def __iter__(self) raises -> NameIterator:
+        """Iterate over attribute names (same order as `keys()`)."""
+        return NameIterator(self.keys())
+
     def keys(self) raises -> List[String]:
         """Get all attribute names.
 
@@ -271,8 +645,14 @@ struct AttributeManager[
         var num = self._lib[].get_num_attrs(self._loc_id)
         if num < 0:
             return result^
+        # Creation order when the object tracks it, otherwise name order.
+        var by_crt = num > 0 and self._lib[].tracks_creation_order(
+            self._loc_id, True
+        )
         for i in range(Int(num)):
-            var attr_name = self._lib[].get_attr_name_by_idx(self._loc_id, i)
+            var attr_name = self._lib[].get_attr_name_by_idx(
+                self._loc_id, i, by_crt
+            )
             result.append(attr_name)
         return result^
 
@@ -354,7 +734,7 @@ struct Dataset[
     mut: Bool,
     //,
     origin: Origin[mut=mut],
-](Copyable, Movable):
+](Copyable, Movable, Sized):
     """Proxy for an HDF5 dataset, similar to ``h5py.Dataset``.
 
     Represents an HDF5 dataset containing multidimensional array data.
@@ -428,6 +808,16 @@ struct Dataset[
             s *= d
         return s
 
+    def __len__(self) -> Int:
+        """Size of the first axis (0 for a scalar dataset)."""
+        if len(self._shape) == 0:
+            return 0
+        return self._shape[0]
+
+    def nbytes(self) -> Int:
+        """Total number of bytes the dataset occupies in memory when read."""
+        return self.size() * _dtype_itemsize(self._dtype_code)
+
     # TODO: I might be able to use comptime condition/where to
     # make sure only these 4 dtypes are used.
     def dtype(self) -> String:
@@ -437,20 +827,7 @@ struct Dataset[
             One of: "float64", "float32", "int32", "int64", "int8",
             "uint8", "unknown".
         """
-        if self._dtype_code == 0:
-            return "float64"
-        elif self._dtype_code == 1:
-            return "float32"
-        elif self._dtype_code == 2:
-            return "int32"
-        elif self._dtype_code == 3:
-            return "int64"
-        elif self._dtype_code == 4:
-            return "int8"
-        elif self._dtype_code == 5:
-            return "uint8"
-        else:
-            return "unknown"
+        return _dtype_name(self._dtype_code)
 
     def name(self) -> String:
         """Get the full path name of the dataset in the HDF5 file.
@@ -675,14 +1052,9 @@ struct Dataset[
 
     def read[
         dtype: DType
-    ](self, buf: Pointer[Scalar[dtype], MutExt], n: Int) raises where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ](
+        self, buf: Pointer[Scalar[dtype], MutExt], n: Int
+    ) raises where SupportedDType[dtype]:
         """Read dataset data into a pre-allocated buffer.
 
         Parameters:
@@ -696,7 +1068,7 @@ struct Dataset[
             Error: If the read operation fails.
 
         Constraints:
-            `dtype` must be one of DType.float64, DType.float32, DType.int32, or DType.int64.
+            `dtype` must be a supported numeric dtype (see the README).
         """
         var rc = self._lib[].read_dataset(
             self._did,
@@ -708,14 +1080,9 @@ struct Dataset[
 
     def write[
         dtype: DType
-    ](self, data: Pointer[Scalar[dtype], MutExt], n: Int) raises where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ](
+        self, data: Pointer[Scalar[dtype], MutExt], n: Int
+    ) raises where SupportedDType[dtype]:
         """Write data from a buffer into the dataset.
 
         Parameters:
@@ -738,14 +1105,7 @@ struct Dataset[
 
     def read_scalar[
         dtype: DType
-    ](self) raises -> Scalar[dtype] where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ](self) raises -> Scalar[dtype] where SupportedDType[dtype]:
         """Read a scalar dataset value."""
         if len(self._shape) != 0:
             raise Error("Dataset: not a scalar dataset '" + self._name + "'")
@@ -757,14 +1117,7 @@ struct Dataset[
 
     def write_scalar[
         dtype: DType
-    ](self, value: Scalar[dtype]) raises where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ](self, value: Scalar[dtype]) raises where SupportedDType[dtype]:
         """Write a scalar dataset value."""
         if len(self._shape) != 0:
             raise Error("Dataset: not a scalar dataset '" + self._name + "'")
@@ -775,14 +1128,7 @@ struct Dataset[
 
     def __getitem__[
         dtype: DType
-    ](self, index: Tuple[]) raises -> Scalar[dtype] where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ](self, index: Tuple[]) raises -> Scalar[dtype] where SupportedDType[dtype]:
         """Read a scalar dataset value via h5py-style empty-tuple indexing.
 
         Mirrors ``h5py``'s ``dset[()]`` for scalar datasets.
@@ -794,14 +1140,9 @@ struct Dataset[
 
     def __setitem__[
         dtype: DType
-    ](mut self, index: Tuple[], value: Scalar[dtype]) raises where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ](
+        mut self, index: Tuple[], value: Scalar[dtype]
+    ) raises where SupportedDType[dtype]:
         """Write a scalar dataset value via h5py-style empty-tuple indexing.
 
         Mirrors ``h5py``'s ``dset[()] = value`` for scalar datasets.
@@ -819,14 +1160,7 @@ struct Dataset[
         start: List[Int],
         count: List[Int],
         buf: Pointer[Scalar[dtype], MutExt],
-    ) raises where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ) raises where SupportedDType[dtype]:
         """Read a contiguous hyperslab into a compact memory buffer.
 
         ``start`` and ``count`` must have one entry per dataset dimension.
@@ -895,14 +1229,7 @@ struct Dataset[
         start: List[Int],
         count: List[Int],
         data: Pointer[Scalar[dtype], MutExt],
-    ) raises where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ) raises where SupportedDType[dtype]:
         """Write a compact memory buffer into a contiguous hyperslab."""
         var ndims = len(self._shape)
         if len(start) != ndims or len(count) != ndims:
@@ -1008,51 +1335,24 @@ struct Dataset[
 
     def read_slice[
         dtype: DType
-    ](self, start: List[Int], stop: List[Int]) raises -> NDArray[dtype] where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ](self, start: List[Int], stop: List[Int]) raises -> NDArray[
+        dtype
+    ] where SupportedDType[dtype]:
         """Read a simple rectangular slice into a compact NDArray."""
         var count = self._slice_count(start, stop)
-        if len(count) == 1:
-            var arr = NDArray[dtype](Shape(count[0]))
-            var total = count[0]
-            var buf = unsafe_alloc[Scalar[dtype]](total)
-            self.read_hyperslab[dtype](start, count, buf)
-            var ptr = arr.unsafe_ptr()
-            for i in range(total):
-                ptr[unsafe_offset=i] = buf[unsafe_offset=i]
-            buf.unsafe_free()
-            return arr^
-        elif len(count) == 2:
-            var arr = NDArray[dtype](Shape(count[0], count[1]))
-            var total = count[0] * count[1]
-            var buf = unsafe_alloc[Scalar[dtype]](total)
-            self.read_hyperslab[dtype](start, count, buf)
-            var ptr = arr.unsafe_ptr()
-            for i in range(total):
-                ptr[unsafe_offset=i] = buf[unsafe_offset=i]
-            buf.unsafe_free()
-            return arr^
-        else:
-            raise Error(
-                "Dataset: unsupported slice rank for '" + self._name + "'"
-            )
+        if len(count) == 0:
+            raise Error("Dataset: cannot slice scalar '" + self._name + "'")
+        var arr = NDArray[dtype](Shape(count))
+        self.read_hyperslab[dtype](
+            start, count, arr.unsafe_ptr().unsafe_origin_cast[MutExt]()
+        )
+        return arr^
 
     def read_slice[
         dtype: DType
-    ](self, slices: List[Slice]) raises -> NDArray[dtype] where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ](self, slices: List[Slice]) raises -> NDArray[dtype] where SupportedDType[
+        dtype
+    ]:
         """Read a simple rectangular slice described by Mojo Slice values."""
         var start = self._slice_starts(slices)
         var stop = self._slice_stops(slices)
@@ -1065,14 +1365,7 @@ struct Dataset[
         start: List[Int],
         stop: List[Int],
         data: Pointer[Scalar[dtype], MutExt],
-    ) raises where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ) raises where SupportedDType[dtype]:
         """Write a compact buffer into a simple rectangular slice."""
         var count = self._slice_count(start, stop)
         self.write_hyperslab[dtype](start, count, data)
@@ -1083,14 +1376,7 @@ struct Dataset[
         self,
         slices: List[Slice],
         data: Pointer[Scalar[dtype], MutExt],
-    ) raises where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ) raises where SupportedDType[dtype]:
         """Write a compact buffer into a slice described by Mojo Slice values.
         """
         var start = self._slice_starts(slices)
@@ -1099,14 +1385,9 @@ struct Dataset[
 
     def read_point[
         dtype: DType
-    ](self, indices: List[Int]) raises -> Scalar[dtype] where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ](self, indices: List[Int]) raises -> Scalar[dtype] where SupportedDType[
+        dtype
+    ]:
         """Read a single scalar value at integer indices."""
         var ndims = len(self._shape)
         if len(indices) != ndims:
@@ -1122,14 +1403,9 @@ struct Dataset[
 
     def write_point[
         dtype: DType
-    ](self, indices: List[Int], value: Scalar[dtype]) raises where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ](
+        self, indices: List[Int], value: Scalar[dtype]
+    ) raises where SupportedDType[dtype]:
         """Write a single scalar value at integer indices."""
         var ndims = len(self._shape)
         if len(indices) != ndims:
@@ -1142,19 +1418,10 @@ struct Dataset[
         self.write_hyperslab[dtype](indices, count, buf)
         buf.unsafe_free()
 
-    # TODO: Still contains old 1D, 2D code, clean this up.
     def read[
         dtype: DType
-    ](self) raises -> NDArray[dtype] where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
-        """Read the entire dataset into an NDArray.
-        Uses NuMojo NDArray for heap-allocated array storage.
+    ](self) raises -> NDArray[dtype] where SupportedDType[dtype]:
+        """Read the entire dataset into an NDArray of any rank (>= 1).
 
         Parameters:
             dtype: The data type to read as (e.g., DType.float64, DType.int32).
@@ -1163,50 +1430,110 @@ struct Dataset[
             An NDArray containing the dataset data.
 
         Raises:
-            Error: If the dataset has more than 2 dimensions or read fails.
-
-        Constraints:
-            `dtype` must be one of DType.float64, DType.float32, DType.int32, or DType.int64.
+            Error: If the dataset is scalar (use `read_scalar`) or the read
+                fails.
         """
-        var nd = len(self._shape)
-        if nd == 1:
-            var n = self._shape[0]
-            var arr = NDArray[dtype](Shape(n))
-            var ptr = arr.unsafe_ptr()
-            var rc = self._lib[].read_dataset(
-                self._did,
-                _hdf5_type_id[dtype](self._lib[]),
-                ptr.unsafe_bitcast[NoneType](),
+        if len(self._shape) == 0:
+            raise Error(
+                "Dataset: '" + self._name + "' is scalar; use read_scalar()"
             )
-            if rc < 0:
-                raise Error("Dataset: H5Dread failed for '" + self._name + "'")
-            return arr^
-        elif nd == 2:
-            var rows = self._shape[0]
-            var cols = self._shape[1]
-            var arr = NDArray[dtype](Shape(rows, cols))
-            var ptr = arr.unsafe_ptr()
-            var rc = self._lib[].read_dataset(
-                self._did,
-                _hdf5_type_id[dtype](self._lib[]),
-                ptr.unsafe_bitcast[NoneType](),
+        var arr = NDArray[dtype](Shape(self._shape))
+        self.read_direct[dtype](arr)
+        return arr^
+
+    def read_direct[
+        dtype: DType
+    ](self, mut dest: NDArray[dtype]) raises where SupportedDType[dtype]:
+        """Read the whole dataset into an existing NDArray (no new allocation).
+
+        `dest` must hold exactly as many elements as the dataset.
+        """
+        if dest.size != self.size():
+            raise Error(
+                "Dataset: read_direct destination has "
+                + String(dest.size)
+                + " elements, dataset '"
+                + self._name
+                + "' has "
+                + String(self.size())
             )
-            if rc < 0:
-                raise Error("Dataset: H5Dread failed for '" + self._name + "'")
-            return arr^
-        else:
-            raise Error("Dataset: unsupported rank for '" + self._name + "'")
+        var rc = self._lib[].read_dataset(
+            self._did,
+            _hdf5_type_id[dtype](self._lib[]),
+            dest.unsafe_ptr().unsafe_bitcast[NoneType](),
+        )
+        if rc < 0:
+            raise Error("Dataset: H5Dread failed for '" + self._name + "'")
+
+    def read_direct[
+        dtype: DType
+    ](
+        self, mut dest: NDArray[dtype], source_sel: List[Slice]
+    ) raises where SupportedDType[dtype]:
+        """Read a rectangular selection straight into an existing NDArray.
+
+        `dest` must hold exactly as many elements as the selection.
+        """
+        var start = self._slice_starts(source_sel)
+        var count = self._slice_count(start, self._slice_stops(source_sel))
+        var n = 1
+        for c in count:
+            n *= c
+        if dest.size != n:
+            raise Error(
+                "Dataset: read_direct destination has "
+                + String(dest.size)
+                + " elements, selection has "
+                + String(n)
+            )
+        self.read_hyperslab[dtype](
+            start, count, dest.unsafe_ptr().unsafe_origin_cast[MutExt]()
+        )
+
+    def write_direct[
+        dtype: DType
+    ](self, source: NDArray[dtype]) raises where SupportedDType[dtype]:
+        """Write an NDArray to the dataset; sizes must match."""
+        if source.size != self.size():
+            raise Error(
+                "Dataset: write_direct source has "
+                + String(source.size)
+                + " elements, dataset '"
+                + self._name
+                + "' has "
+                + String(self.size())
+            )
+        self.write[dtype](source)
+
+    def write_direct[
+        dtype: DType
+    ](
+        self, source: NDArray[dtype], dest_sel: List[Slice]
+    ) raises where SupportedDType[dtype]:
+        """Write an NDArray into a rectangular selection of the dataset."""
+        var start = self._slice_starts(dest_sel)
+        var count = self._slice_count(start, self._slice_stops(dest_sel))
+        var n = 1
+        for c in count:
+            n *= c
+        if source.size != n:
+            raise Error(
+                "Dataset: write_direct source has "
+                + String(source.size)
+                + " elements, selection has "
+                + String(n)
+            )
+        self.write_hyperslab[dtype](
+            start,
+            count,
+            source.unsafe_ptr()
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutExt](),
+        )
 
     def write[
         dtype: DType
-    ](self, data: NDArray[dtype]) raises where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ](self, data: NDArray[dtype]) raises where SupportedDType[dtype]:
         """Write entire NDArray contents to the dataset.
 
         Parameters:
@@ -1452,16 +1779,9 @@ struct Group[
         """
         return len(self._get_member_names())
 
-    def __iter__(self) raises -> List[String]:
-        """Iterate over member names (returns list for Mojo compatibility).
-
-        Returns:
-            A list of member names.
-
-        Raises:
-            Error: If iteration fails.
-        """
-        return self._get_member_names()
+    def __iter__(self) raises -> NameIterator:
+        """Iterate over member names (same order as `keys()`)."""
+        return NameIterator(self.keys())
 
     def items(self) raises -> List[String]:
         """Get names of all members (alias for keys()).
@@ -1492,8 +1812,12 @@ struct Group[
     def _get_member_names(self) raises -> List[String]:
         var result = List[String]()
         var idx = 0
+        # Creation order when the group tracks it, otherwise name order.
+        var by_crt = self._lib[].tracks_creation_order(self._gid, False)
         while True:
-            var member_name = self._lib[].get_link_name_by_idx(self._gid, idx)
+            var member_name = self._lib[].get_link_name_by_idx(
+                self._gid, idx, by_crt
+            )
             if member_name == "":
                 break
             result.append(member_name)
@@ -1570,12 +1894,16 @@ struct Group[
             self._lib, did, shape, dtype_code, full_name, self._filename
         )
 
-    def create_group(self, name: String) raises -> Group[Self.origin]:
+    def create_group(
+        self, name: String, track_order: Bool = False
+    ) raises -> Group[Self.origin]:
         """Create a group, including any intermediate groups in the path.
 
         Args:
             name: Name or path of the group to create.
                 Can be a simple name ("mygroup") or nested path ("a/b/c").
+            track_order: Remember creation order of members and attributes,
+                so `keys()` lists them in the order they were created.
 
         Returns:
             The created Group object.
@@ -1608,7 +1936,9 @@ struct Group[
                 continue
             var child_gid = self._lib[].open_group(current_gid, part)
             if child_gid < 0:
-                child_gid = self._lib[].create_group(current_gid, part)
+                child_gid = self._lib[].create_group(
+                    current_gid, part, track_order
+                )
                 if child_gid < 0:
                     raise Error(
                         "Group.create_group: cannot create '" + part + "'"
@@ -1665,77 +1995,145 @@ struct Group[
 
     def create_dataset[
         dtype: DType
-    ](self, name: String, shape: List[Int],) raises -> Dataset[Self.origin]:
-        """Create a new empty dataset.
+    ](
+        self,
+        name: String,
+        shape: List[Int],
+        fillvalue: Optional[Scalar[dtype]] = None,
+        chunks: List[Int] = [],
+        maxshape: List[Int] = [],
+        compression: String = "",
+        compression_opts: Int = 4,
+        shuffle: Bool = False,
+        fletcher32: Bool = False,
+        track_order: Bool = False,
+    ) raises -> Dataset[Self.origin] where SupportedDType[dtype]:
+        """Create a new dataset (h5py-style ``create_dataset``).
+
+        Chunking is enabled when any of ``chunks``, ``maxshape``,
+        ``compression``, ``shuffle`` or ``fletcher32`` is given; if ``chunks``
+        is omitted a chunk shape is guessed from the dataset shape.
 
         Parameters:
             dtype: The data type for the dataset (e.g., DType.float64, DType.int32).
 
         Args:
             name: Name of the dataset to create.
-            shape: List of dimensions, e.g., [100] or [10, 20].
+            shape: List of dimensions, e.g., [100] or [10, 20]; `[]` creates
+                a scalar dataset.
+            fillvalue: Optional fill value for unwritten elements.
+            chunks: Chunk dimensions (empty = automatic when chunking).
+            maxshape: Maximum dimensions, ``-1`` = unlimited (empty = fixed).
+            compression: ``"gzip"`` or ``""`` (no compression).
+            compression_opts: Level of gzip, 0..9 (default 4).
+            shuffle: Enable the shuffle filter.
+            fletcher32: Enable the fletcher32 checksum filter.
+            track_order: Remember the creation order of the dataset's
+                attributes (so `attrs().keys()` lists them in that order).
 
         Returns:
             The created Dataset object.
 
         Raises:
-            Error: If dataset creation fails.
+            Error: If arguments are inconsistent or dataset creation fails.
         """
-        var sid = self._create_dataspace_for_shape(shape)
-        if sid < 0:
-            raise Error("create_dataset: dataspace creation failed")
-        var tid = _hdf5_type_id[dtype](self._lib[])
-        var did = self._lib[].create_dataset(self._gid, name, tid, sid)
-        _ = self._lib[].close_dataspace(sid)
-        if did < 0:
-            raise Error("create_dataset: H5Dcreate2 failed for '" + name + "'")
+        var ndims = len(shape)
+        if compression != "" and compression != "gzip":
+            raise Error(
+                "create_dataset: unsupported compression '" + compression + "'"
+            )
+        if compression_opts < 0 or compression_opts > 9:
+            raise Error("create_dataset: gzip level must be 0..9")
+        var filtered = compression != "" or shuffle or fletcher32
+        var has_chunks = len(chunks) > 0
+        var has_maxshape = len(maxshape) > 0
+        var chunked = has_chunks or has_maxshape or filtered
+        if chunked and ndims == 0:
+            raise Error(
+                "create_dataset: scalar datasets cannot be chunked or filtered"
+            )
+        if has_chunks and len(chunks) != ndims:
+            raise Error(
+                "create_dataset: chunks rank mismatch for '" + name + "'"
+            )
+        if has_maxshape and len(maxshape) != ndims:
+            raise Error(
+                "create_dataset: maxshape rank mismatch for '" + name + "'"
+            )
 
-        var full_name = self._name
-        if full_name == "/":
-            full_name = "/" + name
+        var sid: hid_t
+        if has_maxshape:
+            var dims = unsafe_alloc[hsize_t](ndims)
+            var maxdims = unsafe_alloc[hsize_t](ndims)
+            for i in range(ndims):
+                dims[unsafe_offset=i] = hsize_t(shape[i])
+                if maxshape[i] < 0:
+                    maxdims[unsafe_offset=i] = hsize_t(-1)
+                else:
+                    maxdims[unsafe_offset=i] = hsize_t(maxshape[i])
+            sid = self._lib[].create_dataspace_nd_max(ndims, dims, maxdims)
+            dims.unsafe_free()
+            maxdims.unsafe_free()
         else:
-            full_name = full_name + "/" + name
-
-        var dtype_code = _dtype_code[dtype]()
-
-        return Dataset[Self.origin](
-            self._lib, did, shape.copy(), dtype_code, full_name, self._filename
-        )
-
-    def create_dataset[
-        dtype: DType
-    ](
-        self,
-        name: String,
-        shape: List[Int],
-        fillvalue: Scalar[dtype],
-    ) raises -> Dataset[Self.origin]:
-        """Create a dataset with a scalar fill value."""
-        var sid = self._create_dataspace_for_shape(shape)
+            sid = self._create_dataspace_for_shape(shape)
         if sid < 0:
             raise Error("create_dataset: dataspace creation failed")
 
-        var dcpl = self._lib[].create_dcpl()
-        if dcpl < 0:
-            _ = self._lib[].close_dataspace(sid)
-            raise Error("create_dataset: H5Pcreate failed")
-
         var tid = _hdf5_type_id[dtype](self._lib[])
-        var buf = unsafe_alloc[Scalar[dtype]](1)
-        buf[unsafe_offset=0] = fillvalue
-        var rc = self._lib[].set_fill_value(
-            dcpl, tid, buf.unsafe_bitcast[NoneType]()
-        )
-        buf.unsafe_free()
-        if rc < 0:
+        var did: hid_t
+        if not chunked and not fillvalue and not track_order:
+            did = self._lib[].create_dataset(self._gid, name, tid, sid)
+        else:
+            var dcpl = self._lib[].create_dcpl()
+            if dcpl < 0:
+                _ = self._lib[].close_dataspace(sid)
+                raise Error("create_dataset: H5Pcreate failed")
+            var err = String()
+            if chunked:
+                var chunk_shape = List[Int]()
+                if has_chunks:
+                    chunk_shape = chunks.copy()
+                else:
+                    chunk_shape = _guess_chunks(
+                        shape, maxshape, size_of[Scalar[dtype]]()
+                    )
+                var chunk_dims = unsafe_alloc[hsize_t](ndims)
+                for i in range(ndims):
+                    chunk_dims[unsafe_offset=i] = hsize_t(chunk_shape[i])
+                if self._lib[].set_chunk(dcpl, chunk_dims, ndims) < 0:
+                    err = "H5Pset_chunk failed"
+                chunk_dims.unsafe_free()
+            if err == "" and shuffle:
+                if self._lib[].set_shuffle(dcpl) < 0:
+                    err = "H5Pset_shuffle failed"
+            if err == "" and compression == "gzip":
+                if self._lib[].set_deflate(dcpl, compression_opts) < 0:
+                    err = "H5Pset_deflate failed"
+            if err == "" and fletcher32:
+                if self._lib[].set_fletcher32(dcpl) < 0:
+                    err = "H5Pset_fletcher32 failed"
+            if err == "" and track_order:
+                if not self._lib[].set_track_order(dcpl):
+                    err = "H5Pset_attr_creation_order failed"
+            if err == "" and fillvalue:
+                var buf = unsafe_alloc[Scalar[dtype]](1)
+                buf[unsafe_offset=0] = fillvalue.value()
+                if (
+                    self._lib[].set_fill_value(
+                        dcpl, tid, buf.unsafe_bitcast[NoneType]()
+                    )
+                    < 0
+                ):
+                    err = "H5Pset_fill_value failed"
+                buf.unsafe_free()
+            if err != "":
+                _ = self._lib[].close_dcpl(dcpl)
+                _ = self._lib[].close_dataspace(sid)
+                raise Error("create_dataset: " + err)
+            did = self._lib[].create_dataset_with_dcpl(
+                self._gid, name, tid, sid, dcpl
+            )
             _ = self._lib[].close_dcpl(dcpl)
-            _ = self._lib[].close_dataspace(sid)
-            raise Error("create_dataset: H5Pset_fill_value failed")
-
-        var did = self._lib[].create_dataset_with_dcpl(
-            self._gid, name, tid, sid, dcpl
-        )
-        _ = self._lib[].close_dcpl(dcpl)
         _ = self._lib[].close_dataspace(sid)
         if did < 0:
             raise Error("create_dataset: H5Dcreate2 failed for '" + name + "'")
@@ -1761,14 +2159,9 @@ struct Group[
         self,
         name: String,
         value: Scalar[dtype],
-    ) raises -> Dataset[Self.origin] where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ) raises -> Dataset[
+        Self.origin
+    ] where SupportedDType[dtype]:
         """Create a scalar dataset and write its single value."""
         var shape = List[Int]()
         var dset = self.create_dataset[dtype](name, shape)
@@ -1783,85 +2176,13 @@ struct Group[
         shape: List[Int],
         maxshape: List[Int],
         chunks: List[Int],
-    ) raises -> Dataset[Self.origin]:
-        """Create a chunked dataset with explicit maxshape.
+    ) raises -> Dataset[Self.origin] where SupportedDType[dtype]:
+        """Create a chunked dataset; prefer ``create_dataset(chunks=, maxshape=)``.
 
         Use ``-1`` in ``maxshape`` for an unlimited dimension.
-
-        Parameters:
-            dtype: The data type for the dataset (e.g., DType.float64, DType.int32).
-
-        Args:
-            name: Name of the dataset to create.
-            shape: Current dimensions.
-            maxshape: Maximum dimensions; -1 means unlimited.
-            chunks: Chunk dimensions.
-
-        Returns:
-            The created Dataset object.
-
-        Raises:
-            Error: If ranks mismatch or HDF5 creation fails.
         """
-        var ndims = len(shape)
-        if len(maxshape) != ndims or len(chunks) != ndims:
-            raise Error(
-                "create_dataset_chunked: rank mismatch for '" + name + "'"
-            )
-
-        var dims = unsafe_alloc[hsize_t](ndims)
-        var maxdims = unsafe_alloc[hsize_t](ndims)
-        var chunk_dims = unsafe_alloc[hsize_t](ndims)
-        var unlimited = hsize_t(-1)
-        for i in range(ndims):
-            dims[unsafe_offset=i] = hsize_t(shape[i])
-            if maxshape[i] < 0:
-                maxdims[unsafe_offset=i] = unlimited
-            else:
-                maxdims[unsafe_offset=i] = hsize_t(maxshape[i])
-            chunk_dims[unsafe_offset=i] = hsize_t(chunks[i])
-
-        var sid = self._lib[].create_dataspace_nd_max(ndims, dims, maxdims)
-        dims.unsafe_free()
-        maxdims.unsafe_free()
-        if sid < 0:
-            chunk_dims.unsafe_free()
-            raise Error("create_dataset_chunked: H5Screate_simple failed")
-
-        var dcpl = self._lib[].create_dcpl()
-        if dcpl < 0:
-            chunk_dims.unsafe_free()
-            _ = self._lib[].close_dataspace(sid)
-            raise Error("create_dataset_chunked: H5Pcreate failed")
-
-        var rc = self._lib[].set_chunk(dcpl, chunk_dims, ndims)
-        chunk_dims.unsafe_free()
-        if rc < 0:
-            _ = self._lib[].close_dcpl(dcpl)
-            _ = self._lib[].close_dataspace(sid)
-            raise Error("create_dataset_chunked: H5Pset_chunk failed")
-
-        var tid = _hdf5_type_id[dtype](self._lib[])
-        var did = self._lib[].create_dataset_with_dcpl(
-            self._gid, name, tid, sid, dcpl
-        )
-        _ = self._lib[].close_dcpl(dcpl)
-        _ = self._lib[].close_dataspace(sid)
-        if did < 0:
-            raise Error(
-                "create_dataset_chunked: H5Dcreate2 failed for '" + name + "'"
-            )
-
-        var full_name = self._name
-        if full_name == "/":
-            full_name = "/" + name
-        else:
-            full_name = full_name + "/" + name
-
-        var dtype_code = _dtype_code[dtype]()
-
-        return Dataset[Self.origin](
-            self._lib, did, shape.copy(), dtype_code, full_name, self._filename
+        return self.create_dataset[dtype](
+            name, shape, chunks=chunks.copy(), maxshape=maxshape.copy()
         )
 
     def create_dataset_chunked[
@@ -1873,81 +2194,14 @@ struct Group[
         maxshape: List[Int],
         chunks: List[Int],
         fillvalue: Scalar[dtype],
-    ) raises -> Dataset[Self.origin]:
-        """Create a chunked dataset with explicit maxshape and fill value."""
-        var ndims = len(shape)
-        if len(maxshape) != ndims or len(chunks) != ndims:
-            raise Error(
-                "create_dataset_chunked: rank mismatch for '" + name + "'"
-            )
-
-        var dims = unsafe_alloc[hsize_t](ndims)
-        var maxdims = unsafe_alloc[hsize_t](ndims)
-        var chunk_dims = unsafe_alloc[hsize_t](ndims)
-        var unlimited = hsize_t(-1)
-        for i in range(ndims):
-            dims[unsafe_offset=i] = hsize_t(shape[i])
-            if maxshape[i] < 0:
-                maxdims[unsafe_offset=i] = unlimited
-            else:
-                maxdims[unsafe_offset=i] = hsize_t(maxshape[i])
-            chunk_dims[unsafe_offset=i] = hsize_t(chunks[i])
-
-        var sid = self._lib[].create_dataspace_nd_max(ndims, dims, maxdims)
-        dims.unsafe_free()
-        maxdims.unsafe_free()
-        if sid < 0:
-            chunk_dims.unsafe_free()
-            raise Error("create_dataset_chunked: H5Screate_simple failed")
-
-        var dcpl = self._lib[].create_dcpl()
-        if dcpl < 0:
-            chunk_dims.unsafe_free()
-            _ = self._lib[].close_dataspace(sid)
-            raise Error("create_dataset_chunked: H5Pcreate failed")
-
-        var rc = self._lib[].set_chunk(dcpl, chunk_dims, ndims)
-        chunk_dims.unsafe_free()
-        if rc < 0:
-            _ = self._lib[].close_dcpl(dcpl)
-            _ = self._lib[].close_dataspace(sid)
-            raise Error("create_dataset_chunked: H5Pset_chunk failed")
-
-        var tid = _hdf5_type_id[dtype](self._lib[])
-        var buf = unsafe_alloc[Scalar[dtype]](1)
-        buf[unsafe_offset=0] = fillvalue
-        rc = self._lib[].set_fill_value(
-            dcpl, tid, buf.unsafe_bitcast[NoneType]()
-        )
-        buf.unsafe_free()
-        if rc < 0:
-            _ = self._lib[].close_dcpl(dcpl)
-            _ = self._lib[].close_dataspace(sid)
-            raise Error("create_dataset_chunked: H5Pset_fill_value failed")
-
-        var did = self._lib[].create_dataset_with_dcpl(
-            self._gid, name, tid, sid, dcpl
-        )
-        _ = self._lib[].close_dcpl(dcpl)
-        _ = self._lib[].close_dataspace(sid)
-        if did < 0:
-            raise Error(
-                "create_dataset_chunked: H5Dcreate2 failed for '" + name + "'"
-            )
-
-        var full_name = self._name
-        if full_name == "/":
-            full_name = "/" + name
-        else:
-            full_name = full_name + "/" + name
-
-        return Dataset[Self.origin](
-            self._lib,
-            did,
-            shape.copy(),
-            _dtype_code[dtype](),
-            full_name,
-            self._filename,
+    ) raises -> Dataset[Self.origin] where SupportedDType[dtype]:
+        """Chunked dataset with a fill value; prefer ``create_dataset``."""
+        return self.create_dataset[dtype](
+            name,
+            shape,
+            fillvalue=fillvalue,
+            chunks=chunks.copy(),
+            maxshape=maxshape.copy(),
         )
 
     def create_dataset_filtered[
@@ -1962,102 +2216,17 @@ struct Group[
         compression_opts: Int,
         shuffle: Bool,
         fletcher32: Bool,
-    ) raises -> Dataset[Self.origin]:
-        """Create a chunked dataset with built-in HDF5 filters.
-
-        Supported compression values are ``"gzip"`` and ``""``.
-        """
-        var ndims = len(shape)
-        if len(maxshape) != ndims or len(chunks) != ndims:
-            raise Error(
-                "create_dataset_filtered: rank mismatch for '" + name + "'"
-            )
-        if compression != "" and compression != "gzip":
-            raise Error(
-                "create_dataset_filtered: unsupported compression '"
-                + compression
-                + "'"
-            )
-        if compression_opts < 0 or compression_opts > 9:
-            raise Error("create_dataset_filtered: gzip level must be 0..9")
-
-        var dims = unsafe_alloc[hsize_t](ndims)
-        var maxdims = unsafe_alloc[hsize_t](ndims)
-        var chunk_dims = unsafe_alloc[hsize_t](ndims)
-        var unlimited = hsize_t(-1)
-        for i in range(ndims):
-            dims[unsafe_offset=i] = hsize_t(shape[i])
-            if maxshape[i] < 0:
-                maxdims[unsafe_offset=i] = unlimited
-            else:
-                maxdims[unsafe_offset=i] = hsize_t(maxshape[i])
-            chunk_dims[unsafe_offset=i] = hsize_t(chunks[i])
-
-        var sid = self._lib[].create_dataspace_nd_max(ndims, dims, maxdims)
-        dims.unsafe_free()
-        maxdims.unsafe_free()
-        if sid < 0:
-            chunk_dims.unsafe_free()
-            raise Error("create_dataset_filtered: H5Screate_simple failed")
-
-        var dcpl = self._lib[].create_dcpl()
-        if dcpl < 0:
-            chunk_dims.unsafe_free()
-            _ = self._lib[].close_dataspace(sid)
-            raise Error("create_dataset_filtered: H5Pcreate failed")
-
-        var rc = self._lib[].set_chunk(dcpl, chunk_dims, ndims)
-        chunk_dims.unsafe_free()
-        if rc < 0:
-            _ = self._lib[].close_dcpl(dcpl)
-            _ = self._lib[].close_dataspace(sid)
-            raise Error("create_dataset_filtered: H5Pset_chunk failed")
-
-        if shuffle:
-            rc = self._lib[].set_shuffle(dcpl)
-            if rc < 0:
-                _ = self._lib[].close_dcpl(dcpl)
-                _ = self._lib[].close_dataspace(sid)
-                raise Error("create_dataset_filtered: H5Pset_shuffle failed")
-
-        if compression == "gzip":
-            rc = self._lib[].set_deflate(dcpl, compression_opts)
-            if rc < 0:
-                _ = self._lib[].close_dcpl(dcpl)
-                _ = self._lib[].close_dataspace(sid)
-                raise Error("create_dataset_filtered: H5Pset_deflate failed")
-
-        if fletcher32:
-            rc = self._lib[].set_fletcher32(dcpl)
-            if rc < 0:
-                _ = self._lib[].close_dcpl(dcpl)
-                _ = self._lib[].close_dataspace(sid)
-                raise Error("create_dataset_filtered: H5Pset_fletcher32 failed")
-
-        var tid = _hdf5_type_id[dtype](self._lib[])
-        var did = self._lib[].create_dataset_with_dcpl(
-            self._gid, name, tid, sid, dcpl
-        )
-        _ = self._lib[].close_dcpl(dcpl)
-        _ = self._lib[].close_dataspace(sid)
-        if did < 0:
-            raise Error(
-                "create_dataset_filtered: H5Dcreate2 failed for '" + name + "'"
-            )
-
-        var full_name = self._name
-        if full_name == "/":
-            full_name = "/" + name
-        else:
-            full_name = full_name + "/" + name
-
-        return Dataset[Self.origin](
-            self._lib,
-            did,
-            shape.copy(),
-            _dtype_code[dtype](),
-            full_name,
-            self._filename,
+    ) raises -> Dataset[Self.origin] where SupportedDType[dtype]:
+        """Chunked dataset with built-in filters; prefer ``create_dataset``."""
+        return self.create_dataset[dtype](
+            name,
+            shape,
+            chunks=chunks.copy(),
+            maxshape=maxshape.copy(),
+            compression=compression,
+            compression_opts=compression_opts,
+            shuffle=shuffle,
+            fletcher32=fletcher32,
         )
 
     def create_dataset_with_data[
@@ -2067,14 +2236,7 @@ struct Group[
         name: String,
         shape: List[Int],
         data: Pointer[Scalar[dtype], MutExt],
-    ) raises -> Dataset[Self.origin] where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ) raises -> Dataset[Self.origin] where SupportedDType[dtype]:
         """Create a dataset and write data to it.
 
         Parameters:
@@ -2105,14 +2267,9 @@ struct Group[
         self,
         name: String,
         data: NDArray[dtype],
-    ) raises -> Dataset[Self.origin] where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ) raises -> Dataset[
+        Self.origin
+    ] where SupportedDType[dtype]:
         """Create a dataset and write data from NuMojo NDArray.
 
         Parameters:
@@ -2130,11 +2287,8 @@ struct Group[
         """
         var shape = List[Int]()
         var shp = data.shape
-        if shp.ndim == 1:
-            shape.append(shp[0])
-        elif shp.ndim == 2:
-            shape.append(shp[0])
-            shape.append(shp[1])
+        for i in range(shp.ndim):
+            shape.append(shp[i])
         var dset = self.create_dataset[dtype](name, shape)
         dset.write[dtype](data)
         return dset^
@@ -2247,7 +2401,7 @@ struct H5Object[
         """
         return self._value.isa[Dataset[Self.origin]]()
 
-    def group(mut self) raises -> Group[Self.origin]:
+    def group(self) raises -> Group[Self.origin]:
         """Unwrap this object as a Group.
 
         Returns:
@@ -2260,7 +2414,7 @@ struct H5Object[
             raise Error("H5Object: not a group")
         return self._value[Group[Self.origin]].copy()
 
-    def dataset(mut self) raises -> Dataset[Self.origin]:
+    def dataset(self) raises -> Dataset[Self.origin]:
         """Unwrap this object as a Dataset.
 
         Returns:
@@ -2280,7 +2434,30 @@ struct H5Object[
 
 
 # TODO: Add libver support.
-struct File(Movable):
+struct _FileHandle(Movable):
+    """Shared owner of an open HDF5 file id; closes it when the last `File`
+    copy goes away (or earlier via `File.close()`)."""
+
+    var lib: ArcPointer[HDF5Lib]
+    var fid: hid_t
+    var is_open: Bool
+
+    def __init__(out self, lib: ArcPointer[HDF5Lib], fid: hid_t):
+        self.lib = lib
+        self.fid = fid
+        self.is_open = fid >= 0
+
+    def close(mut self):
+        if self.is_open:
+            _ = self.lib[].close_file(self.fid)
+            self.is_open = False
+
+    def __deinit__(deinit self):
+        if self.is_open:
+            _ = self.lib[].close_file(self.fid)
+
+
+struct File(Copyable, Movable):
     """HDF5 file object, similar to ``h5py.File``.
 
     Opens an HDF5 file and provides dict-like access to its contents.
@@ -2310,24 +2487,27 @@ struct File(Movable):
         f.close()
     """
 
-    var _lib: OwnedPointer[HDF5Lib]
+    var _lib: ArcPointer[HDF5Lib]
+    var _handle: ArcPointer[_FileHandle]
     var _fid: hid_t
     var _filename: String
     var _mode: String
-    var _closed: Bool
 
-    def __init__(out self, path: String, mode: String = "r") raises:
+    def __init__(
+        out self, path: String, mode: String = "r", track_order: Bool = False
+    ) raises:
         """Open or create an HDF5 file.
 
         Args:
             path: Filesystem path to the HDF5 file.
             mode: Access mode - "r", "r+", "w", "w-", "x", or "a".
+            track_order: When creating a file, remember the creation order of
+                root-level members and file attributes.
 
         Raises:
             Error: If the file cannot be opened/created with the given mode.
         """
-        self._closed = False
-        self._lib = OwnedPointer(HDF5Lib())
+        self._lib = ArcPointer(HDF5Lib())
         self._filename = path
         self._mode = mode
 
@@ -2337,17 +2517,17 @@ struct File(Movable):
         elif mode == "r+":
             fid = self._lib[].open_file(path, H5F_ACC_RDWR)
         elif mode == "w":
-            fid = self._lib[].create_file(path, H5F_ACC_TRUNC)
+            fid = self._lib[].create_file(path, H5F_ACC_TRUNC, track_order)
         elif mode == "w-" or mode == "x":
             var existing = self._lib[].open_file(path, H5F_ACC_RDONLY)
             if existing >= 0:
                 _ = self._lib[].close_file(existing)
                 raise Error("File: file exists '" + path + "'")
-            fid = self._lib[].create_file(path, H5F_ACC_TRUNC)
+            fid = self._lib[].create_file(path, H5F_ACC_TRUNC, track_order)
         elif mode == "a":
             fid = self._lib[].open_file(path, H5F_ACC_RDWR)
             if fid < 0:
-                fid = self._lib[].create_file(path, H5F_ACC_TRUNC)
+                fid = self._lib[].create_file(path, H5F_ACC_TRUNC, track_order)
         else:
             raise Error("File: invalid mode '" + mode + "'")
 
@@ -2361,23 +2541,32 @@ struct File(Movable):
             )
 
         self._fid = fid
+        self._handle = ArcPointer(_FileHandle(self._lib, fid))
+
+    def __enter__(self) -> Self:
+        """Enter a ``with`` block; the file is closed on exit."""
+        return self.copy()
+
+    def __exit__(self):
+        """Close the file (all copies share it) when leaving a ``with`` block.
+        """
+        self._handle[].close()
 
     def close(mut self):
         """Close the file and release resources.
 
-        Always call this when done with the file to flush writes.
+        Safe to call more than once. The file is also closed automatically
+        when the last copy of this `File` is destroyed.
         """
-        if not self._closed and self._fid >= 0:
-            _ = self._lib[].close_file(self._fid)
-            self._fid = -1
-            self._closed = True
+        self._handle[].close()
+        self._fid = -1
 
     def flush(self):
         """Flush pending writes to disk.
 
         Does not close the file.
         """
-        if not self._closed and self._fid >= 0:
+        if self._handle[].is_open:
             _ = self._lib[].flush(self._fid)
 
     def filename(self) -> String:
@@ -2507,6 +2696,10 @@ struct File(Movable):
         """
         return len(self.keys())
 
+    def __iter__(self) raises -> NameIterator:
+        """Iterate over root-level member names (same order as `keys()`)."""
+        return NameIterator(self.keys())
+
     def keys(self) raises -> List[String]:
         """Get names of all members at the root level.
 
@@ -2572,12 +2765,13 @@ struct File(Movable):
         return root._open_dataset(member_name)
 
     def create_group(
-        self, name: String
+        self, name: String, track_order: Bool = False
     ) raises -> Group[origin_of(self._lib[])]:
         """Create a group at the root level.
 
         Args:
             name: Name of the group to create.
+            track_order: Remember creation order of the group's members.
 
         Returns:
             The created Group object.
@@ -2588,7 +2782,7 @@ struct File(Movable):
         var root = Group[origin_of(self._lib[])](
             self._lib_ptr(), self._fid, "/", is_file=True
         )
-        return root.create_group(name)
+        return root.create_group(name, track_order)
 
     def require_group(
         self, name: String
@@ -2644,42 +2838,31 @@ struct File(Movable):
         self,
         name: String,
         shape: List[Int],
-    ) raises -> Dataset[
-        origin_of(self._lib[])
-    ]:
-        """Create a dataset at the root level.
-
-        Parameters:
-            dtype: The data type for the dataset (e.g., DType.float64, DType.int32).
-
-        Args:
-            name: Name of the dataset to create.
-            shape: List of dimensions, e.g., [100] or [10, 20].
-
-        Returns:
-            The created Dataset object.
-
-        Raises:
-            Error: If dataset creation fails.
-        """
+        fillvalue: Optional[Scalar[dtype]] = None,
+        chunks: List[Int] = [],
+        maxshape: List[Int] = [],
+        compression: String = "",
+        compression_opts: Int = 4,
+        shuffle: Bool = False,
+        fletcher32: Bool = False,
+        track_order: Bool = False,
+    ) raises -> Dataset[origin_of(self._lib[])] where SupportedDType[dtype]:
+        """Create a root-level dataset; see ``Group.create_dataset``."""
         var root = Group[origin_of(self._lib[])](
             self._lib_ptr(), self._fid, "/", is_file=True
         )
-        return root.create_dataset[dtype](name, shape)
-
-    def create_dataset[
-        dtype: DType
-    ](
-        self,
-        name: String,
-        shape: List[Int],
-        fillvalue: Scalar[dtype],
-    ) raises -> Dataset[origin_of(self._lib[])]:
-        """Create a root-level dataset with a scalar fill value."""
-        var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+        return root.create_dataset[dtype](
+            name,
+            shape,
+            fillvalue=fillvalue,
+            chunks=chunks.copy(),
+            maxshape=maxshape.copy(),
+            compression=compression,
+            compression_opts=compression_opts,
+            shuffle=shuffle,
+            fletcher32=fletcher32,
+            track_order=track_order,
         )
-        return root.create_dataset[dtype](name, shape, fillvalue)
 
     def create_scalar_dataset[
         dtype: DType
@@ -2687,14 +2870,9 @@ struct File(Movable):
         self,
         name: String,
         value: Scalar[dtype],
-    ) raises -> Dataset[origin_of(self._lib[])] where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ) raises -> Dataset[
+        origin_of(self._lib[])
+    ] where SupportedDType[dtype]:
         """Create a scalar dataset at the root level."""
         var root = Group[origin_of(self._lib[])](
             self._lib_ptr(), self._fid, "/", is_file=True
@@ -2709,15 +2887,14 @@ struct File(Movable):
         shape: List[Int],
         maxshape: List[Int],
         chunks: List[Int],
-    ) raises -> Dataset[origin_of(self._lib[])]:
-        """Create a chunked dataset at the root level.
+    ) raises -> Dataset[origin_of(self._lib[])] where SupportedDType[dtype]:
+        """Create a chunked dataset; prefer ``create_dataset(chunks=, maxshape=)``.
 
         Use ``-1`` in ``maxshape`` for an unlimited dimension.
         """
-        var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+        return self.create_dataset[dtype](
+            name, shape, chunks=chunks.copy(), maxshape=maxshape.copy()
         )
-        return root.create_dataset_chunked[dtype](name, shape, maxshape, chunks)
 
     def create_dataset_chunked[
         dtype: DType
@@ -2728,13 +2905,14 @@ struct File(Movable):
         maxshape: List[Int],
         chunks: List[Int],
         fillvalue: Scalar[dtype],
-    ) raises -> Dataset[origin_of(self._lib[])]:
-        """Create a chunked root-level dataset with a scalar fill value."""
-        var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
-        )
-        return root.create_dataset_chunked[dtype](
-            name, shape, maxshape, chunks, fillvalue
+    ) raises -> Dataset[origin_of(self._lib[])] where SupportedDType[dtype]:
+        """Chunked dataset with a fill value; prefer ``create_dataset``."""
+        return self.create_dataset[dtype](
+            name,
+            shape,
+            fillvalue=fillvalue,
+            chunks=chunks.copy(),
+            maxshape=maxshape.copy(),
         )
 
     def create_dataset_filtered[
@@ -2749,20 +2927,17 @@ struct File(Movable):
         compression_opts: Int,
         shuffle: Bool,
         fletcher32: Bool,
-    ) raises -> Dataset[origin_of(self._lib[])]:
-        """Create a filtered chunked dataset at the root level."""
-        var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
-        )
-        return root.create_dataset_filtered[dtype](
+    ) raises -> Dataset[origin_of(self._lib[])] where SupportedDType[dtype]:
+        """Chunked dataset with built-in filters; prefer ``create_dataset``."""
+        return self.create_dataset[dtype](
             name,
             shape,
-            maxshape,
-            chunks,
-            compression,
-            compression_opts,
-            shuffle,
-            fletcher32,
+            chunks=chunks.copy(),
+            maxshape=maxshape.copy(),
+            compression=compression,
+            compression_opts=compression_opts,
+            shuffle=shuffle,
+            fletcher32=fletcher32,
         )
 
     def create_dataset_with_data[
@@ -2772,14 +2947,7 @@ struct File(Movable):
         name: String,
         shape: List[Int],
         data: Pointer[Scalar[dtype], MutExt],
-    ) raises -> Dataset[origin_of(self._lib[])] where (
-        dtype == DType.float64
-        or dtype == DType.float32
-        or dtype == DType.int64
-        or dtype == DType.int32
-        or dtype == DType.int8
-        or dtype == DType.uint8
-    ):
+    ) raises -> Dataset[origin_of(self._lib[])] where SupportedDType[dtype]:
         """Create a dataset at the root level and write data.
 
         Parameters:
@@ -2801,10 +2969,21 @@ struct File(Movable):
         )
         return root.create_dataset_with_data[dtype](name, shape, data)
 
+    def create_dataset_with_data[
+        dtype: DType
+    ](self, name: String, data: NDArray[dtype]) raises -> Dataset[
+        origin_of(self._lib[])
+    ] where SupportedDType[dtype]:
+        """Create a root-level dataset and write a NuMojo NDArray to it."""
+        var root = Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
+        return root.create_dataset_with_data[dtype](name, data)
+
     def __bool__(self) -> Bool:
         """Check if the file is open.
 
         Returns:
             True if the file is open, False if closed.
         """
-        return not self._closed and self._fid >= 0
+        return self._handle[].is_open
