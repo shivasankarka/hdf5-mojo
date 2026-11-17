@@ -72,7 +72,7 @@ roadmap.
 
 ### From the Modular community channel (recommended)
 
-Add the [Modular community channel](https://repo.prefix.dev/modular-community) to
+Add the [Modular community channel](https://prefix.dev/groups/modular-community) to
 the `channels` of your `pixi.toml`:
 
 ```toml
