@@ -20,7 +20,8 @@ I'm working on porting some particle physics simulation libraries to Mojo. Since
   `uint64`, `uint32`, `uint16`, `uint8` dtypes
 - N-D array reading of any rank with `read[dtype]()` (uses NuMojo NDArray in the
   backend), plus `read_direct`/`write_direct` into existing arrays
-- Scalar and array attributes
+- Scalar and array attributes, scalar string attributes, and string datasets
+  (variable- or fixed-length UTF-8)
 - Chunked datasets, resizable (`maxshape`) datasets, and fill values
 - Built-in filters: gzip compression, shuffle, and fletcher32 checksums,
   plus filter metadata accessors (`compression()`, `shuffle()`, etc.)
@@ -53,14 +54,14 @@ This library covers the dataset/group/attribute workflows needed for the
 particle-physics use case it was built for; it is not yet full h5py parity.
 Notably missing, as of v0.3:
 
-- **Types**: no `bool` or string
-  (fixed- or variable-length) datasets/attributes. No compound, enum,
+- **Types**: no `bool`; no string-array attributes (scalar string attributes
+  and string datasets are supported). No compound, enum,
   opaque, or reference types.
 - **Indexing**: no fancy indexing or multi-block hyperslab selections;
   slicing is limited to simple rectangular regions with unit stride.
-- **Links & traversal**: no `visititems()` or `visit_links()`; link
-  assignment syntax (`g["x"] = SoftLink(...)`) is unavailable, use
-  `create_soft_link()`/`create_external_link()` instead.
+- **Links & traversal**: no `visititems()` or `visit_links()`, and no
+  assignment syntax for links; use `create_soft_link()`,
+  `create_hard_link()` and `create_external_link()`.
 - **File-level features**: no `libver` bounds, alternate file drivers
   (core/in-memory, family/split), or chunk cache tuning.
 - **Advanced HDF5**: no dimension scales, virtual datasets, SWMR, parallel

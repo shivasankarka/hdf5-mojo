@@ -122,6 +122,7 @@ comptime H5I_ATTR: c_int = c_int(6)
 comptime H5T_INTEGER: c_int = c_int(0)
 """H5T_class_t value for integer datatypes."""
 comptime H5T_FLOAT: c_int = c_int(1)
+comptime H5T_STRING: c_int = c_int(3)
 """H5T_class_t value for floating-point datatypes."""
 
 comptime H5T_SGN_NONE: c_int = c_int(0)
@@ -807,6 +808,49 @@ struct HDF5Lib(Movable):
         """
         return self.handle.call["H5Tclose", herr_t](tid)
 
+    def create_string_type(self, fixed_size: Int = 0) -> hid_t:
+        """A UTF-8 C string datatype (copy of ``H5T_C_S1``).
+
+        Args:
+            fixed_size: Fixed length in bytes (including the terminating NUL
+                padding); 0 or less creates a variable-length string type.
+
+        Returns:
+            A type id (close with `close_type`); < 0 on failure.
+        """
+        var base = self.handle.get_symbol[hid_t]("H5T_C_S1_g")
+        if not base:
+            return hid_t(-1)
+        var tid = self.handle.call["H5Tcopy", hid_t](base.value()[])
+        if tid < 0:
+            return tid
+        var size = hsize_t(-1)  # H5T_VARIABLE
+        if fixed_size > 0:
+            size = hsize_t(fixed_size)
+        var rc = self.handle.call["H5Tset_size", herr_t](tid, size)
+        if rc >= 0:
+            rc = self.handle.call["H5Tset_cset", herr_t](tid, c_int(1))  # UTF-8
+        if rc < 0:
+            _ = self.handle.call["H5Tclose", herr_t](tid)
+            return hid_t(-1)
+        return tid
+
+    def is_variable_string(self, tid: hid_t) -> Bool:
+        """``H5Tis_variable_str``: whether a string type is variable-length."""
+        return self.handle.call["H5Tis_variable_str", htri_t](tid) > 0
+
+    def get_string_pad(self, tid: hid_t) -> Int:
+        """``H5Tget_strpad``: 0 null-terminated, 1 null-padded, 2 space-padded.
+        """
+        return Int(self.handle.call["H5Tget_strpad", c_int](tid))
+
+    def free_memory(self, address: Int):
+        """``H5free_memory`` for a buffer allocated by the HDF5 library (such
+        as a variable-length string returned by ``H5Dread``)."""
+        if address != 0:
+            var p = Pointer[NoneType, MutExt](unsafe_from_address=address)
+            _ = self.handle.call["H5free_memory", herr_t](p)
+
     def get_type_class(self, tid: hid_t) -> c_int:
         """Call ``H5Tget_class`` to query the class of a datatype.
 
@@ -1187,7 +1231,8 @@ struct HDF5Lib(Movable):
                 result.append(
                     String(
                         unsafe_from_utf8=Span[Byte](
-                            unsafe_ptr=buf + start, length=pos - start
+                            unsafe_ptr=buf.unsafe_offset(start),
+                            length=pos - start,
                         )
                     )
                 )

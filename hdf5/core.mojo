@@ -27,6 +27,7 @@ from hdf5.ffi import (
     H5I_DATASET,
     H5T_INTEGER,
     H5T_FLOAT,
+    H5T_STRING,
     H5T_SGN_NONE,
 )
 from std.memory import ArcPointer, OwnedPointer, Pointer
@@ -163,6 +164,8 @@ def _infer_dtype_code(
     the `float64` code; callers that need strict validation should check
     `Dataset.dtype()` against the expected string.
     """
+    if tclass == H5T_STRING:
+        return 11
     if tclass == H5T_FLOAT:
         if tsize == 8:
             return 0
@@ -207,6 +210,8 @@ def _dtype_name(code: Int) -> String:
         return "uint64"
     elif code == 10:
         return "float16"
+    elif code == 11:
+        return "string"
     return "unknown"
 
 
@@ -308,6 +313,17 @@ struct AttrValue(Copyable, Movable):
             n *= d
         return n
 
+    def as_string(self) raises -> String:
+        """The value of a string attribute."""
+        if self._code != 11:
+            raise Error("AttrValue: dtype is " + self.dtype)
+        var n = len(self._data)
+        return String(
+            unsafe_from_utf8=Span[Byte](
+                unsafe_ptr=self._data.unsafe_ptr(), length=n
+            )
+        )
+
     def as_scalar[
         dtype: DType
     ](self) raises -> Scalar[dtype] where SupportedDType[dtype]:
@@ -334,6 +350,38 @@ struct AttrValue(Copyable, Movable):
         for i in range(self.size()):
             dst[unsafe_offset=i] = src[unsafe_offset=i]
         return arr^
+
+
+def _string_at(address: Int) -> String:
+    """Decode the NUL-terminated UTF-8 string at a raw address."""
+    var p = Pointer[UInt8, MutExt](unsafe_from_address=address)
+    var n = 0
+    while p[unsafe_offset=n] != 0:
+        n += 1
+    return String(unsafe_from_utf8=Span[Byte](unsafe_ptr=p, length=n))
+
+
+def _decode_fixed_string(
+    buf: Pointer[UInt8, MutExt], offset: Int, size: Int, pad: Int
+) -> String:
+    """Decode one fixed-length HDF5 string element (`pad`: 0 null-terminated,
+    1 null-padded, 2 space-padded)."""
+    var n = 0
+    if pad == 2:
+        n = size
+        while n > 0 and (
+            buf[unsafe_offset=offset + n - 1] == 32
+            or buf[unsafe_offset=offset + n - 1] == 0
+        ):
+            n -= 1
+    else:
+        while n < size and buf[unsafe_offset=offset + n] != 0:
+            n += 1
+    return String(
+        unsafe_from_utf8=Span[Byte](
+            unsafe_ptr=buf.unsafe_offset(offset), length=n
+        )
+    )
 
 
 struct LinkInfo(Copyable, Movable):
@@ -586,10 +634,86 @@ struct AttributeManager[
         """Datatype name of an attribute, e.g. ``"float64"``."""
         return _dtype_name(self._dtype_code_of(name))
 
+    def set_string(self, name: String, value: String) raises:
+        """Write a scalar variable-length UTF-8 string attribute (the layout
+        h5py uses for ``attrs[name] = "text"``); overwrites an existing one."""
+        if self.__contains__(name):
+            self.delete(name)
+        var tid = self._lib[].create_string_type(0)
+        var sid = self._lib[].create_attr_dataspace_scalar()
+        if tid < 0 or sid < 0:
+            if tid >= 0:
+                _ = self._lib[].close_type(tid)
+            if sid >= 0:
+                _ = self._lib[].close_dataspace(sid)
+            raise Error("attrs: string type/dataspace creation failed")
+        var cstr = value + "\0"
+        var slot = unsafe_alloc[Int](1)
+        slot[unsafe_offset=0] = Int(cstr.unsafe_ptr())
+        var rc = self._lib[].write_attr(
+            self._loc_id, name, tid, sid, slot.unsafe_bitcast[NoneType]()
+        )
+        slot.unsafe_free()
+        _ = self._lib[].close_type(tid)
+        _ = self._lib[].close_dataspace(sid)
+        if rc < 0:
+            raise Error("attrs: write failed for '" + name + "'")
+
+    def get_string(self, name: String) raises -> String:
+        """Read a scalar string attribute (variable- or fixed-length)."""
+        if self._dtype_code_of(name) != 11:
+            raise Error("attrs: '" + name + "' is not a string")
+        if len(self.shape(name)) != 0:
+            raise Error("attrs: string array attributes are not supported")
+        var aid = self._lib[].open_attr(self._loc_id, name)
+        if aid < 0:
+            raise Error("attrs: '" + name + "' not found")
+        var ftid = self._lib[].get_attr_type(aid)
+        var result = String()
+        var rc: herr_t
+        if self._lib[].is_variable_string(ftid):
+            var mtid = self._lib[].create_string_type(0)
+            var slot = unsafe_alloc[Int](1)
+            slot[unsafe_offset=0] = 0
+            rc = self._lib[].read_attr(
+                aid, mtid, slot.unsafe_bitcast[NoneType]()
+            )
+            if rc >= 0 and slot[unsafe_offset=0] != 0:
+                result = _string_at(slot[unsafe_offset=0])
+                self._lib[].free_memory(slot[unsafe_offset=0])
+            slot.unsafe_free()
+            _ = self._lib[].close_type(mtid)
+        else:
+            var size = Int(self._lib[].get_type_size(ftid))
+            var buf = unsafe_alloc[UInt8](size + 1)
+            for i in range(size + 1):
+                buf[unsafe_offset=i] = 0
+            rc = self._lib[].read_attr(
+                aid, ftid, buf.unsafe_bitcast[NoneType]()
+            )
+            if rc >= 0:
+                result = _decode_fixed_string(
+                    buf, 0, size, self._lib[].get_string_pad(ftid)
+                )
+            buf.unsafe_free()
+        _ = self._lib[].close_type(ftid)
+        _ = self._lib[].close_attr(aid)
+        if rc < 0:
+            raise Error("attrs: H5Aread failed for '" + name + "'")
+        return result^
+
     def get_value(self, name: String) raises -> AttrValue:
         """Read an attribute of any supported dtype/shape as an `AttrValue`."""
         var shape = self.shape(name)
         var code = self._dtype_code_of(name)
+        if code == 11:
+            if len(shape) != 0:
+                raise Error("attrs: string array attributes are not supported")
+            var text = self.get_string(name)
+            var bytes = List[UInt8]()
+            for b in text.as_bytes():
+                bytes.append(b)
+            return AttrValue("string", shape^, code, bytes^)
         var n = 1
         for d in shape:
             n *= d
@@ -1165,6 +1289,117 @@ struct Dataset[
             _hdf5_type_id[dtype](self._lib[]),
             data.unsafe_bitcast[NoneType](),
         )
+        if rc < 0:
+            raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
+
+    def read_strings(self) raises -> List[String]:
+        """Read a string dataset (variable- or fixed-length) as a flat list in
+        row-major order (a scalar string dataset gives a one-element list)."""
+        if self._dtype_code != 11:
+            raise Error("Dataset: '" + self._name + "' is not a string dataset")
+        var n = self.size()
+        var result = List[String]()
+        if n == 0:
+            return result^
+        var ftid = self._lib[].get_dataset_type(self._did)
+        var rc: herr_t
+        if self._lib[].is_variable_string(ftid):
+            var mtid = self._lib[].create_string_type(0)
+            var slots = unsafe_alloc[Int](n)
+            for i in range(n):
+                slots[unsafe_offset=i] = 0
+            rc = self._lib[].read_dataset(
+                self._did, mtid, slots.unsafe_bitcast[NoneType]()
+            )
+            for i in range(n):
+                if rc >= 0 and slots[unsafe_offset=i] != 0:
+                    result.append(_string_at(slots[unsafe_offset=i]))
+                    self._lib[].free_memory(slots[unsafe_offset=i])
+                else:
+                    result.append(String())
+            slots.unsafe_free()
+            _ = self._lib[].close_type(mtid)
+        else:
+            var size = Int(self._lib[].get_type_size(ftid))
+            var pad = self._lib[].get_string_pad(ftid)
+            var buf = unsafe_alloc[UInt8](n * size + 1)
+            for i in range(n * size + 1):
+                buf[unsafe_offset=i] = 0
+            rc = self._lib[].read_dataset(
+                self._did, ftid, buf.unsafe_bitcast[NoneType]()
+            )
+            if rc >= 0:
+                for i in range(n):
+                    result.append(
+                        _decode_fixed_string(buf, i * size, size, pad)
+                    )
+            buf.unsafe_free()
+        _ = self._lib[].close_type(ftid)
+        if rc < 0:
+            raise Error("Dataset: H5Dread failed for '" + self._name + "'")
+        return result^
+
+    def write_strings(self, values: List[String]) raises:
+        """Write a flat list of strings (row-major) to a string dataset.
+
+        For fixed-length datasets each string must fit in the element size.
+        """
+        if self._dtype_code != 11:
+            raise Error("Dataset: '" + self._name + "' is not a string dataset")
+        var n = self.size()
+        if len(values) != n:
+            raise Error(
+                "Dataset: expected "
+                + String(n)
+                + " strings, got "
+                + String(len(values))
+            )
+        if n == 0:
+            return
+        var ftid = self._lib[].get_dataset_type(self._did)
+        var rc: herr_t
+        if self._lib[].is_variable_string(ftid):
+            var mtid = self._lib[].create_string_type(0)
+            var total = 0
+            for v in values:
+                total += len(v.as_bytes()) + 1
+            var arena = unsafe_alloc[UInt8](total)
+            var slots = unsafe_alloc[Int](n)
+            var pos = 0
+            for i in range(n):
+                var bytes = values[i].as_bytes()
+                slots[unsafe_offset=i] = Int(arena) + pos
+                for j in range(len(bytes)):
+                    arena[unsafe_offset=pos + j] = bytes[j]
+                arena[unsafe_offset=pos + len(bytes)] = 0
+                pos += len(bytes) + 1
+            rc = self._lib[].write_dataset(
+                self._did, mtid, slots.unsafe_bitcast[NoneType]()
+            )
+            slots.unsafe_free()
+            arena.unsafe_free()
+            _ = self._lib[].close_type(mtid)
+        else:
+            var size = Int(self._lib[].get_type_size(ftid))
+            for v in values:
+                if len(v.as_bytes()) > size:
+                    _ = self._lib[].close_type(ftid)
+                    raise Error(
+                        "Dataset: string longer than fixed length "
+                        + String(size)
+                    )
+            var buf = unsafe_alloc[UInt8](n * size)
+            for i in range(n * size):
+                buf[unsafe_offset=i] = 0
+            for i in range(n):
+                var bytes = values[i].as_bytes()
+                for j in range(len(bytes)):
+                    buf[unsafe_offset=i * size + j] = bytes[j]
+            rc = self._lib[].write_dataset(
+                self._did, ftid, buf.unsafe_bitcast[NoneType]()
+            )
+            buf.unsafe_free()
+        _ = self._lib[].close_type(ftid)
         if rc < 0:
             raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
 
@@ -1922,7 +2157,7 @@ struct Group[
         else:
             full_name = full_name + "/" + name
         return Dataset[Self.origin](
-            self._lib, did, read_shape^, dtype_code, full_name, self._filename
+            self._lib, did, read_shape, dtype_code, full_name, self._filename
         )
 
     def visit_names(self) raises -> List[String]:
@@ -2347,6 +2582,52 @@ struct Group[
             full_name,
             self._filename,
         )
+
+    def create_string_dataset(
+        self, name: String, shape: List[Int], fixed_length: Int = 0
+    ) raises -> Dataset[Self.origin]:
+        """Create an (empty) UTF-8 string dataset.
+
+        Args:
+            name: Dataset name.
+            shape: Dimensions; `[]` makes a scalar string dataset.
+            fixed_length: Element size in bytes for fixed-length strings; 0
+                (default) makes variable-length strings, as h5py does for
+                `str` data.
+        """
+        var sid = self._create_dataspace_for_shape(shape)
+        var tid = self._lib[].create_string_type(fixed_length)
+        if sid < 0 or tid < 0:
+            if sid >= 0:
+                _ = self._lib[].close_dataspace(sid)
+            if tid >= 0:
+                _ = self._lib[].close_type(tid)
+            raise Error("create_string_dataset: type/dataspace creation failed")
+        var did = self._lib[].create_dataset(self._gid, name, tid, sid)
+        _ = self._lib[].close_type(tid)
+        _ = self._lib[].close_dataspace(sid)
+        if did < 0:
+            raise Error(
+                "create_string_dataset: H5Dcreate2 failed for '" + name + "'"
+            )
+        var full_name = self._name
+        if full_name == "/":
+            full_name = "/" + name
+        else:
+            full_name = full_name + "/" + name
+        return Dataset[Self.origin](
+            self._lib, did, shape.copy(), 11, full_name, self._filename
+        )
+
+    def create_dataset_with_strings(
+        self, name: String, values: List[String], fixed_length: Int = 0
+    ) raises -> Dataset[Self.origin]:
+        """Create a 1-D string dataset holding `values`."""
+        var shape = List[Int]()
+        shape.append(len(values))
+        var dset = self.create_string_dataset(name, shape, fixed_length)
+        dset.write_strings(values)
+        return dset^
 
     def create_scalar_dataset[
         dtype: DType
@@ -3109,6 +3390,21 @@ struct File(Copyable, Movable):
             shuffle=shuffle,
             fletcher32=fletcher32,
             track_order=track_order,
+        )
+
+    def create_string_dataset(
+        self, name: String, shape: List[Int], fixed_length: Int = 0
+    ) raises -> Dataset[origin_of(self._lib[])]:
+        """Create a root-level string dataset; see
+        ``Group.create_string_dataset``."""
+        return self._root().create_string_dataset(name, shape, fixed_length)
+
+    def create_dataset_with_strings(
+        self, name: String, values: List[String], fixed_length: Int = 0
+    ) raises -> Dataset[origin_of(self._lib[])]:
+        """Create a root-level 1-D string dataset holding `values`."""
+        return self._root().create_dataset_with_strings(
+            name, values, fixed_length
         )
 
     def create_scalar_dataset[

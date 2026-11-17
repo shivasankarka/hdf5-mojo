@@ -50,6 +50,8 @@ the HDF5 hierarchy.
 | `create_dataset_filtered[dtype](name, shape, maxshape, chunks, compression, compression_opts, shuffle, fletcher32)` | Create a chunked dataset with built-in filters (`compression` is `"gzip"` or `""`). |
 | `create_dataset_with_data[dtype](name, shape, data)` | Create a dataset and write a buffer to it. |
 | `create_dataset_with_data[dtype](name, data: NDArray[dtype])` | Create a dataset and write an `NDArray` to it. |
+| `create_string_dataset(name, shape, fixed_length=0)` | Create an empty UTF-8 string dataset (variable-length by default, as h5py does for `str`; `fixed_length=N` for fixed-length). |
+| `create_dataset_with_strings(name, values, fixed_length=0)` | Create a 1-D string dataset holding a `List[String]`. |
 | `require_dataset[dtype](name, shape)` | Open an existing dataset (shape unchanged) or create a new one. |
 
 **Deletion**
@@ -117,6 +119,8 @@ Represents an HDF5 group with dict-like access to members. Obtained via
 | `create_dataset_filtered[dtype](name, shape, maxshape, chunks, compression, compression_opts, shuffle, fletcher32)` | Create a chunked dataset with built-in filters (`compression` is `"gzip"` or `""`). |
 | `create_dataset_with_data[dtype](name, shape, data)` | Create a dataset and write a buffer to it. |
 | `create_dataset_with_data[dtype](name, data: NDArray[dtype])` | Create a dataset and write an `NDArray` to it. |
+| `create_string_dataset(name, shape, fixed_length=0)` | Create an empty UTF-8 string dataset (variable-length by default, as h5py does for `str`; `fixed_length=N` for fixed-length). |
+| `create_dataset_with_strings(name, values, fixed_length=0)` | Create a 1-D string dataset holding a `List[String]`. |
 | `require_dataset[dtype](name, shape)` | Open an existing dataset (shape unchanged) or create a new one. |
 
 **Deletion**
@@ -153,7 +157,7 @@ Represents an HDF5 dataset containing array data.
 | `shape()` | List of dimensions, e.g., `[100, 50]` (`[]` for a scalar dataset). |
 | `ndim()` | Number of dimensions (`0` for a scalar dataset). |
 | `size()` | Total number of elements. |
-| `dtype()` | Datatype string, e.g. `"float64"`, `"uint16"`, or `"unknown"`. |
+| `dtype()` | Datatype string, e.g. `"float64"`, `"uint16"`, `"string"`, or `"unknown"`. |
 | `len(dset)` | Size of the first axis (0 for a scalar dataset). |
 | `nbytes()` | Total size in bytes (`size() * itemsize`). |
 | `name()` | Full path of the dataset. |
@@ -193,6 +197,8 @@ Represents an HDF5 dataset containing array data.
 | Method | Description |
 |--------|-------------|
 | `read_scalar[dtype]()` | Read a scalar dataset's value. |
+| `read_strings() -> List[String]` | Read a string dataset (variable- or fixed-length) as a flat row-major list. |
+| `write_strings(values)` | Write a flat list of strings (fixed-length datasets reject strings that do not fit). |
 | `write_scalar[dtype](value)` | Write a scalar dataset's value. |
 | `dset.__getitem__[dtype](())` (i.e. `dset[()]`) | h5py-style empty-tuple read of a scalar dataset. |
 | `dset.__setitem__[dtype]((), value)` (i.e. `dset[()] = value`) | h5py-style empty-tuple write of a scalar dataset. |
@@ -265,6 +271,8 @@ f.attrs().delete("temp_attr")                                  # delete
 | `write_scalar[dtype](name, value)` | Write an attribute value; overwrites an existing attribute of the same name. |
 | `get[dtype](name, default)` | Read an attribute value, or `default` if absent. |
 | `set[dtype](name, value)` | Write an attribute value (alias for `write_scalar`). |
+| `set_string(name, value)` | Write a scalar variable-length UTF-8 string attribute (h5py layout; overwrites). |
+| `get_string(name)` | Read a scalar string attribute (variable- or fixed-length). |
 | `read_array[dtype](name)` | Read an array attribute (rank >= 1) as an `NDArray`. |
 | `write_array[dtype](name, array)` | Write an `NDArray` as an array attribute (overwrites). |
 | `shape(name)` | Attribute shape (`[]` for scalar attributes). |
@@ -300,6 +308,7 @@ Type-erased attribute value returned by `attrs().get_value()`, `items()` and
 | Method | Description |
 |--------|-------------|
 | `is_scalar()` / `size()` | Scalar check / number of elements. |
+| `as_string()` | Extract a string attribute's value (raises if the attribute is not a string). |
 | `as_scalar[dtype]()` | Extract a scalar value (raises on dtype mismatch or arrays). |
 | `as_array[dtype]()` | Extract an array value as an `NDArray[dtype]` (raises on mismatch or scalars). |
 
