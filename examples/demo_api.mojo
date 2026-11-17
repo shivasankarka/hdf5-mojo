@@ -22,12 +22,13 @@
 #   - Reading scalar attributes:   group.attrs().read_scalar[dtype](name)
 #   - Reading datasets:            dset.read_all[dtype]()
 #   - NDArray shape and indexing:  .dim0, .dim1, .size(), arr.get(i), arr.get(row, col)
-#   - Freeing heap buffers:        .free()
+#   - Freeing heap buffers:        .unsafe_free()
 #   - Creating a file for writing: File(path, "w")
 #   - Creating groups:             require_group(name)
 #   - Writing datasets:           create_dataset_with_data[dtype](name, shape, ptr)
 #   - Closing handles:            f.close()
 
+from std.memory.alloc import unsafe_alloc
 from hdf5 import File, f64, f32, i32, i64
 from numojo.prelude import NDArray
 
@@ -139,27 +140,27 @@ def main() raises:
     var daily = summary.require_group("daily")
 
     # Write a 1-D Float64 dataset.
-    var means = alloc[Float64](Int(num_stations))
-    means[0] = 22.1
-    means[1] = 19.8
-    means[2] = 25.3
-    means[3] = 17.6
-    means[4] = 21.0
+    var means = unsafe_alloc[Float64](Int(num_stations))
+    means[unsafe_offset=0] = 22.1
+    means[unsafe_offset=1] = 19.8
+    means[unsafe_offset=2] = 25.3
+    means[unsafe_offset=3] = 17.6
+    means[unsafe_offset=4] = 21.0
     var means_shape = List[Int]()
     means_shape.append(Int(num_stations))
     var means_dset = summary.create_dataset_with_data[f64](
         "mean_temp_c", means_shape, means
     )
     means_dset.close()
-    means.free()
+    means.unsafe_free()
 
     # Write a 2-D Float64 dataset (3 days × 5 stations, row-major).
     var n_days_out = 3
     var n_stat_out = Int(num_stations)
-    var excerpt = alloc[Float64](n_days_out * n_stat_out)
+    var excerpt = unsafe_alloc[Float64](n_days_out * n_stat_out)
     for d in range(n_days_out):
         for s in range(n_stat_out):
-            excerpt[d * n_stat_out + s] = Float64(d * 10 + s)
+            excerpt[unsafe_offset=d * n_stat_out + s] = Float64(d * 10 + s)
     var excerpt_shape = List[Int]()
     excerpt_shape.append(n_days_out)
     excerpt_shape.append(n_stat_out)
@@ -167,7 +168,7 @@ def main() raises:
         "temp_excerpt", excerpt_shape, excerpt
     )
     excerpt_dset.close()
-    excerpt.free()
+    excerpt.unsafe_free()
 
     daily.close()
     summary.close()

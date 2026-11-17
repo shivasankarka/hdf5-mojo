@@ -1,4 +1,5 @@
-from std.memory import UnsafePointer, alloc
+from std.memory.alloc import unsafe_alloc
+from std.memory import UnsafePointer
 from std.testing import TestSuite, assert_true, assert_equal
 from numojo import Item
 
@@ -236,18 +237,18 @@ def test_dataset_read_write() raises:
     var f = File("tests/test_dataset_rw.h5", "w")
 
     var n = 5
-    var buf = alloc[Scalar[DType.float64]](n)
-    buf[0] = 1.0
-    buf[1] = 2.0
-    buf[2] = 3.0
-    buf[3] = 4.0
-    buf[4] = 5.0
+    var buf = unsafe_alloc[Scalar[DType.float64]](n)
+    buf[unsafe_offset=0] = 1.0
+    buf[unsafe_offset=1] = 2.0
+    buf[unsafe_offset=2] = 3.0
+    buf[unsafe_offset=3] = 4.0
+    buf[unsafe_offset=4] = 5.0
 
     var shape = List[Int]()
     shape.append(n)
     var dset = f.create_dataset_with_data[DType.float64]("data", shape, buf)
     dset.close()
-    buf.free()
+    buf.unsafe_free()
 
     f.close()
 

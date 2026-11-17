@@ -316,7 +316,9 @@ struct AttrValue(Copyable, Movable):
             raise Error("AttrValue: dtype is " + self.dtype)
         if not self.is_scalar():
             raise Error("AttrValue: not a scalar; use as_array()")
-        return self._data.unsafe_ptr().unsafe_bitcast[Scalar[dtype]]()[0]
+        return self._data.unsafe_ptr().unsafe_bitcast[Scalar[dtype]]()[
+            unsafe_offset=0
+        ]
 
     def as_array[
         dtype: DType

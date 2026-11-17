@@ -1,4 +1,5 @@
-from std.memory import UnsafePointer, alloc
+from std.memory.alloc import unsafe_alloc
+from std.memory import UnsafePointer
 from std.testing import TestSuite, assert_equal, assert_true
 
 from hdf5 import File
@@ -96,11 +97,15 @@ def test_dataset_fillvalue() raises:
         dset.fillvalue[DType.int32](), Int32(7), "fillvalue should be 7"
     )
 
-    var buf = alloc[Int32](4)
+    var buf = unsafe_alloc[Int32](4)
     dset.read[DType.int32](buf, 4)
     for i in range(4):
-        assert_equal(buf[i], Int32(7), "unwritten data should use fillvalue")
-    buf.free()
+        assert_equal(
+            buf[unsafe_offset=i],
+            Int32(7),
+            "unwritten data should use fillvalue",
+        )
+    buf.unsafe_free()
 
     dset.close()
     f.close()
@@ -130,13 +135,15 @@ def test_dataset_chunked_fillvalue() raises:
         "fillvalue should be 1.25",
     )
 
-    var buf = alloc[Float64](6)
+    var buf = unsafe_alloc[Float64](6)
     dset.read[DType.float64](buf, 6)
     for i in range(6):
         assert_equal(
-            buf[i], Float64(1.25), "chunked unwritten data should use fillvalue"
+            buf[unsafe_offset=i],
+            Float64(1.25),
+            "chunked unwritten data should use fillvalue",
         )
-    buf.free()
+    buf.unsafe_free()
 
     dset.close()
     f.close()
@@ -176,21 +183,21 @@ def test_dataset_filtered_gzip_shuffle_fletcher32() raises:
         filter_names[2], "fletcher32", "third filter should be fletcher32"
     )
 
-    var data = alloc[Int32](8)
+    var data = unsafe_alloc[Int32](8)
     for i in range(8):
-        data[i] = Int32(i * 3)
+        data[unsafe_offset=i] = Int32(i * 3)
     dset.write[DType.int32](data, 8)
-    data.free()
+    data.unsafe_free()
 
-    var readback = alloc[Int32](8)
+    var readback = unsafe_alloc[Int32](8)
     dset.read[DType.int32](readback, 8)
     for i in range(8):
         assert_equal(
-            readback[i],
+            readback[unsafe_offset=i],
             Int32(i * 3),
             "filtered dataset should round-trip data",
         )
-    readback.free()
+    readback.unsafe_free()
 
     dset.close()
     f.close()
@@ -223,12 +230,12 @@ def test_dataset_read_hyperslab() raises:
     var shape = List[Int]()
     shape.append(4)
     shape.append(5)
-    var data = alloc[Int32](20)
+    var data = unsafe_alloc[Int32](20)
     for i in range(20):
-        data[i] = Int32(i)
+        data[unsafe_offset=i] = Int32(i)
 
     var dset = f.create_dataset_with_data[DType.int32]("data", shape, data)
-    data.free()
+    data.unsafe_free()
 
     var start = List[Int]()
     start.append(1)
@@ -236,14 +243,14 @@ def test_dataset_read_hyperslab() raises:
     var count = List[Int]()
     count.append(2)
     count.append(2)
-    var buf = alloc[Int32](4)
+    var buf = unsafe_alloc[Int32](4)
 
     dset.read_hyperslab[DType.int32](start, count, buf)
-    assert_equal(buf[0], Int32(7), "first hyperslab value")
-    assert_equal(buf[1], Int32(8), "second hyperslab value")
-    assert_equal(buf[2], Int32(12), "third hyperslab value")
-    assert_equal(buf[3], Int32(13), "fourth hyperslab value")
-    buf.free()
+    assert_equal(buf[unsafe_offset=0], Int32(7), "first hyperslab value")
+    assert_equal(buf[unsafe_offset=1], Int32(8), "second hyperslab value")
+    assert_equal(buf[unsafe_offset=2], Int32(12), "third hyperslab value")
+    assert_equal(buf[unsafe_offset=3], Int32(13), "fourth hyperslab value")
+    buf.unsafe_free()
 
     dset.close()
     f.close()
@@ -264,23 +271,25 @@ def test_dataset_write_hyperslab() raises:
     var count = List[Int]()
     count.append(2)
     count.append(2)
-    var patch = alloc[Int32](4)
-    patch[0] = Int32(11)
-    patch[1] = Int32(12)
-    patch[2] = Int32(21)
-    patch[3] = Int32(22)
+    var patch = unsafe_alloc[Int32](4)
+    patch[unsafe_offset=0] = Int32(11)
+    patch[unsafe_offset=1] = Int32(12)
+    patch[unsafe_offset=2] = Int32(21)
+    patch[unsafe_offset=3] = Int32(22)
 
     dset.write_hyperslab[DType.int32](start, count, patch)
-    patch.free()
+    patch.unsafe_free()
 
-    var readback = alloc[Int32](20)
+    var readback = unsafe_alloc[Int32](20)
     dset.read[DType.int32](readback, 20)
-    assert_equal(readback[6], Int32(11), "written row 1 col 1")
-    assert_equal(readback[7], Int32(12), "written row 1 col 2")
-    assert_equal(readback[11], Int32(21), "written row 2 col 1")
-    assert_equal(readback[12], Int32(22), "written row 2 col 2")
-    assert_equal(readback[0], Int32(0), "unselected values stay unchanged")
-    readback.free()
+    assert_equal(readback[unsafe_offset=6], Int32(11), "written row 1 col 1")
+    assert_equal(readback[unsafe_offset=7], Int32(12), "written row 1 col 2")
+    assert_equal(readback[unsafe_offset=11], Int32(21), "written row 2 col 1")
+    assert_equal(readback[unsafe_offset=12], Int32(22), "written row 2 col 2")
+    assert_equal(
+        readback[unsafe_offset=0], Int32(0), "unselected values stay unchanged"
+    )
+    readback.unsafe_free()
 
     dset.close()
     f.close()
@@ -292,11 +301,11 @@ def test_dataset_read_write_point() raises:
 
     var shape1 = List[Int]()
     shape1.append(5)
-    var data1 = alloc[Int32](5)
+    var data1 = unsafe_alloc[Int32](5)
     for i in range(5):
-        data1[i] = Int32(i + 10)
+        data1[unsafe_offset=i] = Int32(i + 10)
     var dset1 = f.create_dataset_with_data[DType.int32]("one_d", shape1, data1)
-    data1.free()
+    data1.unsafe_free()
 
     var idx1 = List[Int]()
     idx1.append(2)
@@ -316,11 +325,11 @@ def test_dataset_read_write_point() raises:
     var shape2 = List[Int]()
     shape2.append(3)
     shape2.append(4)
-    var data2 = alloc[Int32](12)
+    var data2 = unsafe_alloc[Int32](12)
     for i in range(12):
-        data2[i] = Int32(i)
+        data2[unsafe_offset=i] = Int32(i)
     var dset2 = f.create_dataset_with_data[DType.int32]("two_d", shape2, data2)
-    data2.free()
+    data2.unsafe_free()
 
     var idx2 = List[Int]()
     idx2.append(1)
@@ -346,27 +355,27 @@ def test_dataset_read_write_slice() raises:
 
     var shape1 = List[Int]()
     shape1.append(6)
-    var data1 = alloc[Int32](6)
+    var data1 = unsafe_alloc[Int32](6)
     for i in range(6):
-        data1[i] = Int32(i)
+        data1[unsafe_offset=i] = Int32(i)
     var dset1 = f.create_dataset_with_data[DType.int32]("one_d", shape1, data1)
-    data1.free()
+    data1.unsafe_free()
 
     var none = Optional[Int]()
     var slices1 = List[Slice]()
     slices1.append(Slice(2, 5))
     var arr1 = dset1.read_slice[DType.int32](slices1)
     var arr1_ptr = arr1.unsafe_ptr()
-    assert_equal(arr1_ptr[0], Int32(2), "1D slice first value")
-    assert_equal(arr1_ptr[1], Int32(3), "1D slice second value")
-    assert_equal(arr1_ptr[2], Int32(4), "1D slice third value")
+    assert_equal(arr1_ptr[unsafe_offset=0], Int32(2), "1D slice first value")
+    assert_equal(arr1_ptr[unsafe_offset=1], Int32(3), "1D slice second value")
+    assert_equal(arr1_ptr[unsafe_offset=2], Int32(4), "1D slice third value")
 
-    var patch1 = alloc[Int32](3)
-    patch1[0] = Int32(20)
-    patch1[1] = Int32(30)
-    patch1[2] = Int32(40)
+    var patch1 = unsafe_alloc[Int32](3)
+    patch1[unsafe_offset=0] = Int32(20)
+    patch1[unsafe_offset=1] = Int32(30)
+    patch1[unsafe_offset=2] = Int32(40)
     dset1.write_slice[DType.int32](slices1, patch1)
-    patch1.free()
+    patch1.unsafe_free()
     var start1 = List[Int]()
     start1.append(2)
     assert_equal(
@@ -379,33 +388,33 @@ def test_dataset_read_write_slice() raises:
     var shape2 = List[Int]()
     shape2.append(4)
     shape2.append(5)
-    var data2 = alloc[Int32](20)
+    var data2 = unsafe_alloc[Int32](20)
     for i in range(20):
-        data2[i] = Int32(i)
+        data2[unsafe_offset=i] = Int32(i)
     var dset2 = f.create_dataset_with_data[DType.int32]("two_d", shape2, data2)
-    data2.free()
+    data2.unsafe_free()
 
     var slices2 = List[Slice]()
     slices2.append(Slice(1, 3))
     slices2.append(Slice(Optional[Int](2), none, none))
     var arr2 = dset2.read_slice[DType.int32](slices2)
     var arr2_ptr = arr2.unsafe_ptr()
-    assert_equal(arr2_ptr[0], Int32(7), "2D slice first value")
-    assert_equal(arr2_ptr[1], Int32(8), "2D slice second value")
-    assert_equal(arr2_ptr[2], Int32(9), "2D slice third value")
-    assert_equal(arr2_ptr[3], Int32(12), "2D slice fourth value")
-    assert_equal(arr2_ptr[4], Int32(13), "2D slice fifth value")
-    assert_equal(arr2_ptr[5], Int32(14), "2D slice sixth value")
+    assert_equal(arr2_ptr[unsafe_offset=0], Int32(7), "2D slice first value")
+    assert_equal(arr2_ptr[unsafe_offset=1], Int32(8), "2D slice second value")
+    assert_equal(arr2_ptr[unsafe_offset=2], Int32(9), "2D slice third value")
+    assert_equal(arr2_ptr[unsafe_offset=3], Int32(12), "2D slice fourth value")
+    assert_equal(arr2_ptr[unsafe_offset=4], Int32(13), "2D slice fifth value")
+    assert_equal(arr2_ptr[unsafe_offset=5], Int32(14), "2D slice sixth value")
 
-    var patch2 = alloc[Int32](6)
-    patch2[0] = Int32(101)
-    patch2[1] = Int32(102)
-    patch2[2] = Int32(103)
-    patch2[3] = Int32(201)
-    patch2[4] = Int32(202)
-    patch2[5] = Int32(203)
+    var patch2 = unsafe_alloc[Int32](6)
+    patch2[unsafe_offset=0] = Int32(101)
+    patch2[unsafe_offset=1] = Int32(102)
+    patch2[unsafe_offset=2] = Int32(103)
+    patch2[unsafe_offset=3] = Int32(201)
+    patch2[unsafe_offset=4] = Int32(202)
+    patch2[unsafe_offset=5] = Int32(203)
     dset2.write_slice[DType.int32](slices2, patch2)
-    patch2.free()
+    patch2.unsafe_free()
     var start2 = List[Int]()
     start2.append(1)
     start2.append(2)
@@ -490,39 +499,51 @@ def test_dataset_int8_uint8_round_trip() raises:
     var i8_dset = f.create_dataset[DType.int8]("i8", shape)
     assert_equal(i8_dset.dtype(), "int8", "dtype() should report int8")
 
-    var i8_data = alloc[Int8](4)
-    i8_data[0] = Int8(-128)
-    i8_data[1] = Int8(-1)
-    i8_data[2] = Int8(0)
-    i8_data[3] = Int8(127)
+    var i8_data = unsafe_alloc[Int8](4)
+    i8_data[unsafe_offset=0] = Int8(-128)
+    i8_data[unsafe_offset=1] = Int8(-1)
+    i8_data[unsafe_offset=2] = Int8(0)
+    i8_data[unsafe_offset=3] = Int8(127)
     i8_dset.write[DType.int8](i8_data, 4)
-    i8_data.free()
+    i8_data.unsafe_free()
 
-    var i8_readback = alloc[Int8](4)
+    var i8_readback = unsafe_alloc[Int8](4)
     i8_dset.read[DType.int8](i8_readback, 4)
-    assert_equal(i8_readback[0], Int8(-128), "int8 min value round-trip")
-    assert_equal(i8_readback[1], Int8(-1), "int8 negative value round-trip")
-    assert_equal(i8_readback[3], Int8(127), "int8 max value round-trip")
-    i8_readback.free()
+    assert_equal(
+        i8_readback[unsafe_offset=0], Int8(-128), "int8 min value round-trip"
+    )
+    assert_equal(
+        i8_readback[unsafe_offset=1], Int8(-1), "int8 negative value round-trip"
+    )
+    assert_equal(
+        i8_readback[unsafe_offset=3], Int8(127), "int8 max value round-trip"
+    )
+    i8_readback.unsafe_free()
     i8_dset.close()
 
     var u8_dset = f.create_dataset[DType.uint8]("u8", shape)
     assert_equal(u8_dset.dtype(), "uint8", "dtype() should report uint8")
 
-    var u8_data = alloc[UInt8](4)
-    u8_data[0] = UInt8(0)
-    u8_data[1] = UInt8(1)
-    u8_data[2] = UInt8(200)
-    u8_data[3] = UInt8(255)
+    var u8_data = unsafe_alloc[UInt8](4)
+    u8_data[unsafe_offset=0] = UInt8(0)
+    u8_data[unsafe_offset=1] = UInt8(1)
+    u8_data[unsafe_offset=2] = UInt8(200)
+    u8_data[unsafe_offset=3] = UInt8(255)
     u8_dset.write[DType.uint8](u8_data, 4)
-    u8_data.free()
+    u8_data.unsafe_free()
 
-    var u8_readback = alloc[UInt8](4)
+    var u8_readback = unsafe_alloc[UInt8](4)
     u8_dset.read[DType.uint8](u8_readback, 4)
-    assert_equal(u8_readback[0], UInt8(0), "uint8 min value round-trip")
-    assert_equal(u8_readback[2], UInt8(200), "uint8 mid value round-trip")
-    assert_equal(u8_readback[3], UInt8(255), "uint8 max value round-trip")
-    u8_readback.free()
+    assert_equal(
+        u8_readback[unsafe_offset=0], UInt8(0), "uint8 min value round-trip"
+    )
+    assert_equal(
+        u8_readback[unsafe_offset=2], UInt8(200), "uint8 mid value round-trip"
+    )
+    assert_equal(
+        u8_readback[unsafe_offset=3], UInt8(255), "uint8 max value round-trip"
+    )
+    u8_readback.unsafe_free()
     u8_dset.close()
 
     f.close()

@@ -1,4 +1,4 @@
-from std.memory import alloc
+from std.memory.alloc import unsafe_alloc
 from std.testing import TestSuite, assert_equal, assert_true
 
 from hdf5 import File
@@ -12,11 +12,11 @@ def _roundtrip[
     var f = File(path, "w")
     var shape: List[Int] = [4]
     var dset = f.create_dataset[dtype](name, shape)
-    var buf = alloc[Scalar[dtype]](4)
+    var buf = unsafe_alloc[Scalar[dtype]](4)
     for i in range(4):
-        buf[i] = Scalar[dtype](i + 1)
+        buf[unsafe_offset=i] = Scalar[dtype](i + 1)
     dset.write[dtype](buf, 4)
-    buf.free()
+    buf.unsafe_free()
     dset.attrs().set[dtype]("a", Scalar[dtype](7))
     dset.close()
     f.close()
@@ -25,11 +25,13 @@ def _roundtrip[
     var obj = f2.get(name)
     var d = obj.dataset()
     assert_equal(d.dtype(), expected)
-    var out = alloc[Scalar[dtype]](4)
+    var out = unsafe_alloc[Scalar[dtype]](4)
     d.read[dtype](out, 4)
     for i in range(4):
-        assert_true(out[i] == Scalar[dtype](i + 1), "value mismatch")
-    out.free()
+        assert_true(
+            out[unsafe_offset=i] == Scalar[dtype](i + 1), "value mismatch"
+        )
+    out.unsafe_free()
     assert_true(d.attrs().read_scalar[dtype]("a") == Scalar[dtype](7))
     d.close()
     f2.close()

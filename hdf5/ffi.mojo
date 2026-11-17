@@ -1248,7 +1248,7 @@ struct HDF5Lib(Movable):
             return False
         var flags = unsafe_alloc[c_uint](1)
         flags[unsafe_offset=0] = c_uint(0)
-        var rc = herr_t(-1)
+        var rc: herr_t
         if attrs:
             rc = self.handle.call["H5Pget_attr_creation_order", herr_t](
                 plist, flags
