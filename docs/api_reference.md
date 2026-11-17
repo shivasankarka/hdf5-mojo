@@ -57,6 +57,15 @@ the HDF5 hierarchy.
 | Method | Description |
 |--------|-------------|
 | `delete(name)` | Delete a root-level member. |
+| `move(source, dest)` | Move/rename an object. |
+| `copy_object(source, dest)` | Deep-copy an object (and attributes) within the file. (`File.copy()` duplicates the handle.) |
+| `create_soft_link(name, target)` | Create a soft (path) link. |
+| `create_hard_link(name, target)` | Add another name for an existing object. |
+| `create_external_link(name, filename, path)` | Link to an object in another file. |
+| `get_link(name) -> LinkInfo` | Describe a link without following it. |
+| `create_dataset_like(name, other_path)` | Empty dataset with the dtype/shape/chunks/filters/fill value of the dataset at `other_path`. |
+| `visit_names()` | Paths of every object below, via hard links (each object once; soft/external links not followed). |
+| `visit[func]() -> Optional[String]` | Call `func(name)` for each object; stops and returns the name when `func` returns `True`. `func` must be a plain `def(String) raises -> Bool`. |
 
 **Operations**
 
@@ -115,6 +124,15 @@ Represents an HDF5 group with dict-like access to members. Obtained via
 | Method | Description |
 |--------|-------------|
 | `delete(name)` | Delete a member. |
+| `move(source, dest)` | Move/rename an object. |
+| `copy(source, dest)` | Deep-copy an object (and attributes) within the file. |
+| `create_soft_link(name, target)` | Create a soft (path) link. |
+| `create_hard_link(name, target)` | Add another name for an existing object. |
+| `create_external_link(name, filename, path)` | Link to an object in another file. |
+| `get_link(name) -> LinkInfo` | Describe a link without following it. |
+| `create_dataset_like(name, other_path)` | Empty dataset with the dtype/shape/chunks/filters/fill value of the dataset at `other_path`. |
+| `visit_names()` | Paths of every object below, via hard links (each object once; soft/external links not followed). |
+| `visit[func]() -> Optional[String]` | Call `func(name)` for each object; stops and returns the name when `func` returns `True`. `func` must be a plain `def(String) raises -> Bool`. |
 
 **Operations**
 
@@ -263,6 +281,14 @@ f.attrs().delete("temp_attr")                                  # delete
 | Method | Description |
 |--------|-------------|
 | `delete(name)` / `__delitem__(name)` | Delete an attribute. |
+
+---
+
+## LinkInfo
+
+Returned by `get_link(name)`. Fields: `kind` (`"hard"`, `"soft"` or
+`"external"`), `path` (target path for soft/external links) and `filename`
+(target file for external links).
 
 ---
 

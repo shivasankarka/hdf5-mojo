@@ -58,8 +58,9 @@ Notably missing, as of v0.3:
   opaque, or reference types.
 - **Indexing**: no fancy indexing or multi-block hyperslab selections;
   slicing is limited to simple rectangular regions with unit stride.
-- **Links & traversal**: no `visit()`/`visititems()`, no hard/soft/external
-  links, no `move`/`copy`.
+- **Links & traversal**: no `visititems()` or `visit_links()`; link
+  assignment syntax (`g["x"] = SoftLink(...)`) is unavailable, use
+  `create_soft_link()`/`create_external_link()` instead.
 - **File-level features**: no `libver` bounds, alternate file drivers
   (core/in-memory, family/split), or chunk cache tuning.
 - **Advanced HDF5**: no dimension scales, virtual datasets, SWMR, parallel

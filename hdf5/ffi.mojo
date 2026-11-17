@@ -1056,6 +1056,169 @@ struct HDF5Lib(Movable):
             H5P_DEFAULT,
         )
 
+    # ===------------------------------------------------------------------=== #
+    # Links, move, copy, object identity
+    # ===------------------------------------------------------------------=== #
+
+    def move_link(
+        self,
+        src_loc: hid_t,
+        src_name: String,
+        dst_loc: hid_t,
+        dst_name: String,
+    ) -> herr_t:
+        """Call ``H5Lmove`` to move or rename a link within a file."""
+        return self.handle.call["H5Lmove", herr_t](
+            src_loc,
+            _cstr(src_name).unsafe_ptr().unsafe_bitcast[c_char](),
+            dst_loc,
+            _cstr(dst_name).unsafe_ptr().unsafe_bitcast[c_char](),
+            H5P_DEFAULT,
+            H5P_DEFAULT,
+        )
+
+    def copy_object(
+        self,
+        src_loc: hid_t,
+        src_name: String,
+        dst_loc: hid_t,
+        dst_name: String,
+    ) -> herr_t:
+        """Call ``H5Ocopy`` to deep-copy an object (and its attributes)."""
+        return self.handle.call["H5Ocopy", herr_t](
+            src_loc,
+            _cstr(src_name).unsafe_ptr().unsafe_bitcast[c_char](),
+            dst_loc,
+            _cstr(dst_name).unsafe_ptr().unsafe_bitcast[c_char](),
+            H5P_DEFAULT,
+            H5P_DEFAULT,
+        )
+
+    def create_soft_link(
+        self, target: String, loc_id: hid_t, name: String
+    ) -> herr_t:
+        """Call ``H5Lcreate_soft``: `name` becomes a path alias to `target`."""
+        return self.handle.call["H5Lcreate_soft", herr_t](
+            _cstr(target).unsafe_ptr().unsafe_bitcast[c_char](),
+            loc_id,
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
+            H5P_DEFAULT,
+            H5P_DEFAULT,
+        )
+
+    def create_hard_link(
+        self,
+        cur_loc: hid_t,
+        cur_name: String,
+        dst_loc: hid_t,
+        dst_name: String,
+    ) -> herr_t:
+        """Call ``H5Lcreate_hard``: a second name for an existing object."""
+        return self.handle.call["H5Lcreate_hard", herr_t](
+            cur_loc,
+            _cstr(cur_name).unsafe_ptr().unsafe_bitcast[c_char](),
+            dst_loc,
+            _cstr(dst_name).unsafe_ptr().unsafe_bitcast[c_char](),
+            H5P_DEFAULT,
+            H5P_DEFAULT,
+        )
+
+    def create_external_link(
+        self, filename: String, obj_path: String, loc_id: hid_t, name: String
+    ) -> herr_t:
+        """Call ``H5Lcreate_external``: a link to an object in another file."""
+        return self.handle.call["H5Lcreate_external", herr_t](
+            _cstr(filename).unsafe_ptr().unsafe_bitcast[c_char](),
+            _cstr(obj_path).unsafe_ptr().unsafe_bitcast[c_char](),
+            loc_id,
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
+            H5P_DEFAULT,
+            H5P_DEFAULT,
+        )
+
+    def get_link_kind(self, loc_id: hid_t, name: String) -> Int:
+        """Link type via ``H5Lget_info2``: 0 hard, 1 soft, 64 external,
+        -1 if the link does not exist."""
+        var info = unsafe_alloc[UInt8](256)
+        for i in range(256):
+            info[unsafe_offset=i] = 0
+        var rc = self.handle.call["H5Lget_info2", herr_t](
+            loc_id,
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
+            info.unsafe_bitcast[NoneType](),
+            H5P_DEFAULT,
+        )
+        # `H5L_info2_t` starts with the `H5L_type_t` enum (a C int).
+        var kind = -1
+        if rc >= 0:
+            kind = Int(info.unsafe_bitcast[c_int]()[unsafe_offset=0])
+        info.unsafe_free()
+        return kind
+
+    def get_link_value(self, loc_id: hid_t, name: String) -> List[String]:
+        """Value of a soft or external link via ``H5Lget_val``.
+
+        Returns `[target]` for a soft link and `[filename, object_path]` for
+        an external link; empty for hard links or on failure.
+        """
+        var kind = self.get_link_kind(loc_id, name)
+        var result = List[String]()
+        if kind != 1 and kind != 64:
+            return result^
+        var size = 4096
+        var buf = unsafe_alloc[UInt8](size)
+        for i in range(size):
+            buf[unsafe_offset=i] = 0
+        var rc = self.handle.call["H5Lget_val", herr_t](
+            loc_id,
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
+            buf.unsafe_bitcast[NoneType](),
+            c_ulong_long(size),
+            H5P_DEFAULT,
+        )
+        if rc >= 0:
+            # Soft: "target\0". External: version/flags byte, "file\0path\0".
+            var pos = 0 if kind == 1 else 1
+            var parts = 1 if kind == 1 else 2
+            for _ in range(parts):
+                var start = pos
+                while pos < size and buf[unsafe_offset=pos] != 0:
+                    pos += 1
+                result.append(
+                    String(
+                        unsafe_from_utf8=Span[Byte](
+                            unsafe_ptr=buf + start, length=pos - start
+                        )
+                    )
+                )
+                pos += 1
+        buf.unsafe_free()
+        return result^
+
+    def object_key(self, loc_id: hid_t, name: String) -> String:
+        """Identity of the object `name` resolves to (file number + object
+        token via ``H5Oget_info_by_name3``); equal keys mean the same object.
+        Empty string on failure."""
+        var info = unsafe_alloc[UInt8](256)
+        for i in range(256):
+            info[unsafe_offset=i] = 0
+        var rc = self.handle.call["H5Oget_info_by_name3", herr_t](
+            loc_id,
+            _cstr(name).unsafe_ptr().unsafe_bitcast[c_char](),
+            info.unsafe_bitcast[NoneType](),
+            c_uint(1),  # H5O_INFO_BASIC: fileno + token + type + rc
+            H5P_DEFAULT,
+        )
+        var key = String()
+        if rc >= 0:
+            comptime digits = "0123456789abcdef"
+            for i in range(24):  # fileno (8 bytes) + token (16 bytes)
+                var b = Int(info[unsafe_offset=i])
+                key += String(digits[byte=b >> 4])
+                key += String(digits[byte=b & 15])
+        info.unsafe_free()
+        return key^
+
     def delete_attr(self, loc_id: hid_t, name: String) -> herr_t:
         """Call ``H5Adelete`` to remove an attribute.
 

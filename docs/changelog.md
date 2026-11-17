@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased (v0.4 work)
+
+- Links: `create_soft_link`, `create_hard_link`, `create_external_link` and
+  `get_link(name) -> LinkInfo` on `File` and `Group`.
+- `move(source, dest)` and `copy(source, dest)` (`File.copy_object`) for
+  objects within a file.
+- `create_dataset_like(name, other_path)`: empty dataset with the same dtype,
+  shape, maxshape, chunking, filters and fill value.
+- Traversal: `visit_names()` (recursive object paths; each object once; soft
+  and external links not followed) and `visit[func]()` with early stop.
+
 ## v0.3.0
 
 - New dtypes: `int16`, `uint16`, `uint32`, `uint64`, `float16`. Unsigned 32/64-bit

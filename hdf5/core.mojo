@@ -336,6 +336,69 @@ struct AttrValue(Copyable, Movable):
         return arr^
 
 
+struct LinkInfo(Copyable, Movable):
+    """Description of a link returned by `Group.get_link`.
+
+    `kind` is ``"hard"``, ``"soft"`` or ``"external"``. `path` is the target
+    path (soft/external) and `filename` the target file (external only).
+    """
+
+    var kind: String
+    var path: String
+    var filename: String
+
+    def __init__(
+        out self, kind: String, path: String = "", filename: String = ""
+    ):
+        self.kind = kind
+        self.path = path
+        self.filename = filename
+
+
+def _member_names_of(lib: HDF5Lib, gid: hid_t) -> List[String]:
+    """Link names directly under `gid`: creation order if the group tracks
+    it, otherwise name order."""
+    var result = List[String]()
+    var idx = 0
+    var by_crt = lib.tracks_creation_order(gid, False)
+    while True:
+        var member_name = lib.get_link_name_by_idx(gid, idx, by_crt)
+        if member_name == "":
+            break
+        result.append(member_name)
+        idx += 1
+    return result^
+
+
+def _walk_group(
+    lib: HDF5Lib,
+    gid: hid_t,
+    prefix: String,
+    mut seen: List[String],
+    mut out: List[String],
+):
+    """Collect paths of all hard-linked objects below `gid` (each object once,
+    soft and external links not followed), as `Group.visit` does."""
+    for name in _member_names_of(lib, gid):
+        if lib.get_link_kind(gid, name) != 0:
+            continue
+        var key = lib.object_key(gid, name)
+        if key == "" or key in seen:
+            continue
+        seen.append(key)
+        out.append(prefix + name)
+        var oid = lib.open_object(gid, name)
+        if oid < 0:
+            continue
+        var kind = lib.get_object_type(oid)
+        _ = lib.close_object(oid)
+        if kind == H5I_GROUP:
+            var child = lib.open_group(gid, name)
+            if child >= 0:
+                _walk_group(lib, child, prefix + name + "/", seen, out)
+                _ = lib.close_group(child)
+
+
 # ===----------------------------------------------------------------------=== #
 # AttributeManager
 # ===----------------------------------------------------------------------=== #
@@ -1748,6 +1811,148 @@ struct Group[
         if rc < 0:
             raise Error("Group: cannot delete '" + member_name + "'")
 
+    def move(self, source: String, dest: String) raises:
+        """Move or rename a member (like ``h5py.Group.move``).
+
+        Both paths are relative to this group (or absolute); the destination's
+        parent group must already exist.
+        """
+        if self._lib[].move_link(self._gid, source, self._gid, dest) < 0:
+            raise Error("Group: cannot move '" + source + "' to '" + dest + "'")
+
+    def copy(self, source: String, dest: String) raises:
+        """Deep-copy an object (and its attributes) within this file.
+
+        The destination must not exist and its parent group must exist.
+        """
+        if self._lib[].copy_object(self._gid, source, self._gid, dest) < 0:
+            raise Error("Group: cannot copy '" + source + "' to '" + dest + "'")
+
+    def create_soft_link(self, name: String, target: String) raises:
+        """Create `name` as a soft link (path alias) to `target`."""
+        if self._lib[].create_soft_link(target, self._gid, name) < 0:
+            raise Error("Group: cannot create soft link '" + name + "'")
+
+    def create_hard_link(self, name: String, target: String) raises:
+        """Create `name` as another hard link to the existing object `target`.
+        """
+        if not self._lib[].object_exists(self._gid, target):
+            raise Error("Group: link target '" + target + "' not found")
+        if self._lib[].create_hard_link(self._gid, target, self._gid, name) < 0:
+            raise Error("Group: cannot create hard link '" + name + "'")
+
+    def create_external_link(
+        self, name: String, filename: String, path: String
+    ) raises:
+        """Create `name` as a link to `path` inside another HDF5 file."""
+        if (
+            self._lib[].create_external_link(filename, path, self._gid, name)
+            < 0
+        ):
+            raise Error("Group: cannot create external link '" + name + "'")
+
+    def get_link(self, name: String) raises -> LinkInfo:
+        """Describe the link `name` without following it (h5py's
+        ``get(name, getlink=True)``)."""
+        var kind = self._lib[].get_link_kind(self._gid, name)
+        if kind < 0:
+            raise Error("Group: link '" + name + "' not found")
+        if kind == 0:
+            return LinkInfo("hard")
+        var value = self._lib[].get_link_value(self._gid, name)
+        if kind == 1 and len(value) == 1:
+            return LinkInfo("soft", value[0])
+        if kind == 64 and len(value) == 2:
+            return LinkInfo("external", value[1], value[0])
+        raise Error("Group: cannot read link '" + name + "'")
+
+    def create_dataset_like(
+        self, name: String, other: String
+    ) raises -> Dataset[Self.origin]:
+        """Create an empty dataset with the same dtype, shape, maxshape,
+        chunking, filters and fill value as the existing dataset at path
+        `other` in this file (no data is copied).
+
+        `other` is a path rather than a `Dataset` because Mojo does not allow
+        passing a dataset opened from this same file back into one of its
+        methods.
+        """
+        var src = self._lib[].open_object(self._gid, other)
+        if src < 0 or self._lib[].get_object_type(src) != H5I_DATASET:
+            if src >= 0:
+                _ = self._lib[].close_object(src)
+            raise Error("create_dataset_like: '" + other + "' is not a dataset")
+        var tid = self._lib[].get_dataset_type(src)
+        var sid = self._lib[].get_dataset_space(src)
+        var dcpl = self._lib[].get_dcpl(src)
+        var read_shape = List[Int]()
+        var dtype_code = 0
+        if tid >= 0 and sid >= 0:
+            var ndims = Int(self._lib[].get_space_ndims(sid))
+            if ndims > 0:
+                var dims = self._lib[].get_space_dims(sid, ndims)
+                for i in range(ndims):
+                    read_shape.append(Int(dims[unsafe_offset=i]))
+                dims.unsafe_free()
+            dtype_code = _infer_dtype_code(
+                self._lib[],
+                tid,
+                self._lib[].get_type_class(tid),
+                Int(self._lib[].get_type_size(tid)),
+            )
+        var did = hid_t(-1)
+        if tid >= 0 and sid >= 0 and dcpl >= 0:
+            did = self._lib[].create_dataset_with_dcpl(
+                self._gid, name, tid, sid, dcpl
+            )
+        if tid >= 0:
+            _ = self._lib[].close_type(tid)
+        if sid >= 0:
+            _ = self._lib[].close_dataspace(sid)
+        if dcpl >= 0:
+            _ = self._lib[].close_dcpl(dcpl)
+        _ = self._lib[].close_object(src)
+        if did < 0:
+            raise Error(
+                "create_dataset_like: H5Dcreate2 failed for '" + name + "'"
+            )
+        var full_name = self._name
+        if full_name == "/":
+            full_name = "/" + name
+        else:
+            full_name = full_name + "/" + name
+        return Dataset[Self.origin](
+            self._lib, did, read_shape^, dtype_code, full_name, self._filename
+        )
+
+    def visit_names(self) raises -> List[String]:
+        """Paths (relative to this group) of every object below it, found
+        recursively through hard links; each object is listed once and soft
+        or external links are not followed."""
+        var seen = List[String]()
+        var out = List[String]()
+        var self_key = self._lib[].object_key(self._gid, ".")
+        if self_key != "":
+            seen.append(self_key)
+        _walk_group(self._lib[], self._gid, "", seen, out)
+        return out^
+
+    def visit[
+        func: def(String) raises capturing -> Bool
+    ](self) raises -> Optional[String]:
+        """Call `func(name)` for every object below this group (see
+        `visit_names`). Stops early and returns the name for which `func`
+        returned `True`; returns `None` if the traversal completed.
+
+        `func` must be a plain (non-capturing) function; use `visit_names()`
+        to simply collect the paths. (No `visititems`: its callback would need
+        the file's internal origin type, which user code cannot name.)
+        """
+        for name in self.visit_names():
+            if func(name):
+                return Optional[String](name)
+        return None
+
     def len(self) raises -> Int:
         """Get the number of members in this group.
 
@@ -1812,19 +2017,7 @@ struct Group[
         return result^
 
     def _get_member_names(self) raises -> List[String]:
-        var result = List[String]()
-        var idx = 0
-        # Creation order when the group tracks it, otherwise name order.
-        var by_crt = self._lib[].tracks_creation_order(self._gid, False)
-        while True:
-            var member_name = self._lib[].get_link_name_by_idx(
-                self._gid, idx, by_crt
-            )
-            if member_name == "":
-                break
-            result.append(member_name)
-            idx += 1
-        return result^
+        return _member_names_of(self._lib[], self._gid)
 
     def __getitem__(self, member_name: String) raises -> H5Object[Self.origin]:
         """Get a member (group or dataset) by name.
@@ -2686,6 +2879,58 @@ struct File(Copyable, Movable):
         var rc = self._lib[].delete_object(self._fid, member_name)
         if rc < 0:
             raise Error("File: cannot delete '" + member_name + "'")
+
+    def _root(self) -> Group[origin_of(self._lib[])]:
+        return Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
+
+    def move(self, source: String, dest: String) raises:
+        """Move or rename an object; see ``Group.move``."""
+        self._root().move(source, dest)
+
+    def copy_object(self, source: String, dest: String) raises:
+        """Deep-copy an object within the file; see ``Group.copy``.
+
+        (Named `copy_object` because `File.copy()` duplicates the `File`
+        handle itself.)
+        """
+        self._root().copy(source, dest)
+
+    def create_soft_link(self, name: String, target: String) raises:
+        """Create a soft link at the root level."""
+        self._root().create_soft_link(name, target)
+
+    def create_hard_link(self, name: String, target: String) raises:
+        """Create another hard link to an existing object."""
+        self._root().create_hard_link(name, target)
+
+    def create_external_link(
+        self, name: String, filename: String, path: String
+    ) raises:
+        """Create an external link at the root level."""
+        self._root().create_external_link(name, filename, path)
+
+    def get_link(self, name: String) raises -> LinkInfo:
+        """Describe a root-level link without following it."""
+        return self._root().get_link(name)
+
+    def create_dataset_like(
+        self, name: String, other: String
+    ) raises -> Dataset[origin_of(self._lib[])]:
+        """Create an empty root-level dataset shaped like the dataset at
+        path `other`; see ``Group.create_dataset_like``."""
+        return self._root().create_dataset_like(name, other)
+
+    def visit_names(self) raises -> List[String]:
+        """Paths of every object in the file; see ``Group.visit_names``."""
+        return self._root().visit_names()
+
+    def visit[
+        func: def(String) raises capturing -> Bool
+    ](self) raises -> Optional[String]:
+        """Call `func(name)` for every object; see ``Group.visit``."""
+        return self._root().visit[func]()
 
     def len(self) raises -> Int:
         """Get the number of members at the root level.
