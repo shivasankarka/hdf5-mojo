@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased (v0.4 work)
+## v0.4.0
 
 - Strings: scalar string attributes (`attrs().set_string` / `get_string`),
   string datasets of any shape (`create_string_dataset`,

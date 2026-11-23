@@ -52,7 +52,7 @@ I'm working on porting some particle physics simulation libraries to Mojo. Since
 
 This library covers the dataset/group/attribute workflows needed for the
 particle-physics use case it was built for; it is not yet full h5py parity.
-Notably missing, as of v0.3:
+Notably missing, as of v0.4:
 
 - **Types**: no `bool`; no string-array attributes (scalar string attributes
   and string datasets are supported). No compound, enum,

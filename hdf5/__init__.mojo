@@ -4,7 +4,7 @@
 # See LICENSE for more information.
 # ===----------------------------------------------------------------------=== #
 """
-HDF5 v0.3.0
+HDF5 v0.4.0
 ============
 High-level HDF5 file I/O for Mojo with h5py-compatible API.
 
@@ -25,7 +25,7 @@ Example usage:
 
 For direct access to the HDF5 C API import ``hdf5.ffi`` instead.
 """
-comptime __version__ = "0.3.0"
+comptime __version__ = "0.4.0"
 
 from numojo.prelude import NDArray, Item, Shape, f64, f32, i32, i64
 
