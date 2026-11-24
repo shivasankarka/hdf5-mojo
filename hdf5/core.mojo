@@ -27,6 +27,7 @@ from hdf5.ffi import (
     H5I_DATASET,
     H5T_INTEGER,
     H5T_FLOAT,
+    H5T_STRING,
     H5T_SGN_NONE,
 )
 from std.memory import ArcPointer, OwnedPointer, Pointer
@@ -163,6 +164,8 @@ def _infer_dtype_code(
     the `float64` code; callers that need strict validation should check
     `Dataset.dtype()` against the expected string.
     """
+    if tclass == H5T_STRING:
+        return 11
     if tclass == H5T_FLOAT:
         if tsize == 8:
             return 0
@@ -207,6 +210,8 @@ def _dtype_name(code: Int) -> String:
         return "uint64"
     elif code == 10:
         return "float16"
+    elif code == 11:
+        return "string"
     return "unknown"
 
 
@@ -308,6 +313,17 @@ struct AttrValue(Copyable, Movable):
             n *= d
         return n
 
+    def as_string(self) raises -> String:
+        """The value of a string attribute."""
+        if self._code != 11:
+            raise Error("AttrValue: dtype is " + self.dtype)
+        var n = len(self._data)
+        return String(
+            unsafe_from_utf8=Span[Byte](
+                unsafe_ptr=self._data.unsafe_ptr(), length=n
+            )
+        )
+
     def as_scalar[
         dtype: DType
     ](self) raises -> Scalar[dtype] where SupportedDType[dtype]:
@@ -334,6 +350,101 @@ struct AttrValue(Copyable, Movable):
         for i in range(self.size()):
             dst[unsafe_offset=i] = src[unsafe_offset=i]
         return arr^
+
+
+def _string_at(address: Int) -> String:
+    """Decode the NUL-terminated UTF-8 string at a raw address."""
+    var p = Pointer[UInt8, MutExt](unsafe_from_address=address)
+    var n = 0
+    while p[unsafe_offset=n] != 0:
+        n += 1
+    return String(unsafe_from_utf8=Span[Byte](unsafe_ptr=p, length=n))
+
+
+def _decode_fixed_string(
+    buf: Pointer[UInt8, MutExt], offset: Int, size: Int, pad: Int
+) -> String:
+    """Decode one fixed-length HDF5 string element (`pad`: 0 null-terminated,
+    1 null-padded, 2 space-padded)."""
+    var n = 0
+    if pad == 2:
+        n = size
+        while n > 0 and (
+            buf[unsafe_offset=offset + n - 1] == 32
+            or buf[unsafe_offset=offset + n - 1] == 0
+        ):
+            n -= 1
+    else:
+        while n < size and buf[unsafe_offset=offset + n] != 0:
+            n += 1
+    return String(
+        unsafe_from_utf8=Span[Byte](
+            unsafe_ptr=buf.unsafe_offset(offset), length=n
+        )
+    )
+
+
+struct LinkInfo(Copyable, Movable):
+    """Description of a link returned by `Group.get_link`.
+
+    `kind` is ``"hard"``, ``"soft"`` or ``"external"``. `path` is the target
+    path (soft/external) and `filename` the target file (external only).
+    """
+
+    var kind: String
+    var path: String
+    var filename: String
+
+    def __init__(
+        out self, kind: String, path: String = "", filename: String = ""
+    ):
+        self.kind = kind
+        self.path = path
+        self.filename = filename
+
+
+def _member_names_of(lib: HDF5Lib, gid: hid_t) -> List[String]:
+    """Link names directly under `gid`: creation order if the group tracks
+    it, otherwise name order."""
+    var result = List[String]()
+    var idx = 0
+    var by_crt = lib.tracks_creation_order(gid, False)
+    while True:
+        var member_name = lib.get_link_name_by_idx(gid, idx, by_crt)
+        if member_name == "":
+            break
+        result.append(member_name)
+        idx += 1
+    return result^
+
+
+def _walk_group(
+    lib: HDF5Lib,
+    gid: hid_t,
+    prefix: String,
+    mut seen: List[String],
+    mut out: List[String],
+):
+    """Collect paths of all hard-linked objects below `gid` (each object once,
+    soft and external links not followed), as `Group.visit` does."""
+    for name in _member_names_of(lib, gid):
+        if lib.get_link_kind(gid, name) != 0:
+            continue
+        var key = lib.object_key(gid, name)
+        if key == "" or key in seen:
+            continue
+        seen.append(key)
+        out.append(prefix + name)
+        var oid = lib.open_object(gid, name)
+        if oid < 0:
+            continue
+        var kind = lib.get_object_type(oid)
+        _ = lib.close_object(oid)
+        if kind == H5I_GROUP:
+            var child = lib.open_group(gid, name)
+            if child >= 0:
+                _walk_group(lib, child, prefix + name + "/", seen, out)
+                _ = lib.close_group(child)
 
 
 # ===----------------------------------------------------------------------=== #
@@ -523,10 +634,86 @@ struct AttributeManager[
         """Datatype name of an attribute, e.g. ``"float64"``."""
         return _dtype_name(self._dtype_code_of(name))
 
+    def set_string(self, name: String, value: String) raises:
+        """Write a scalar variable-length UTF-8 string attribute (the layout
+        h5py uses for ``attrs[name] = "text"``); overwrites an existing one."""
+        if self.__contains__(name):
+            self.delete(name)
+        var tid = self._lib[].create_string_type(0)
+        var sid = self._lib[].create_attr_dataspace_scalar()
+        if tid < 0 or sid < 0:
+            if tid >= 0:
+                _ = self._lib[].close_type(tid)
+            if sid >= 0:
+                _ = self._lib[].close_dataspace(sid)
+            raise Error("attrs: string type/dataspace creation failed")
+        var cstr = value + "\0"
+        var slot = unsafe_alloc[Int](1)
+        slot[unsafe_offset=0] = Int(cstr.unsafe_ptr())
+        var rc = self._lib[].write_attr(
+            self._loc_id, name, tid, sid, slot.unsafe_bitcast[NoneType]()
+        )
+        slot.unsafe_free()
+        _ = self._lib[].close_type(tid)
+        _ = self._lib[].close_dataspace(sid)
+        if rc < 0:
+            raise Error("attrs: write failed for '" + name + "'")
+
+    def get_string(self, name: String) raises -> String:
+        """Read a scalar string attribute (variable- or fixed-length)."""
+        if self._dtype_code_of(name) != 11:
+            raise Error("attrs: '" + name + "' is not a string")
+        if len(self.shape(name)) != 0:
+            raise Error("attrs: string array attributes are not supported")
+        var aid = self._lib[].open_attr(self._loc_id, name)
+        if aid < 0:
+            raise Error("attrs: '" + name + "' not found")
+        var ftid = self._lib[].get_attr_type(aid)
+        var result = String()
+        var rc: herr_t
+        if self._lib[].is_variable_string(ftid):
+            var mtid = self._lib[].create_string_type(0)
+            var slot = unsafe_alloc[Int](1)
+            slot[unsafe_offset=0] = 0
+            rc = self._lib[].read_attr(
+                aid, mtid, slot.unsafe_bitcast[NoneType]()
+            )
+            if rc >= 0 and slot[unsafe_offset=0] != 0:
+                result = _string_at(slot[unsafe_offset=0])
+                self._lib[].free_memory(slot[unsafe_offset=0])
+            slot.unsafe_free()
+            _ = self._lib[].close_type(mtid)
+        else:
+            var size = Int(self._lib[].get_type_size(ftid))
+            var buf = unsafe_alloc[UInt8](size + 1)
+            for i in range(size + 1):
+                buf[unsafe_offset=i] = 0
+            rc = self._lib[].read_attr(
+                aid, ftid, buf.unsafe_bitcast[NoneType]()
+            )
+            if rc >= 0:
+                result = _decode_fixed_string(
+                    buf, 0, size, self._lib[].get_string_pad(ftid)
+                )
+            buf.unsafe_free()
+        _ = self._lib[].close_type(ftid)
+        _ = self._lib[].close_attr(aid)
+        if rc < 0:
+            raise Error("attrs: H5Aread failed for '" + name + "'")
+        return result^
+
     def get_value(self, name: String) raises -> AttrValue:
         """Read an attribute of any supported dtype/shape as an `AttrValue`."""
         var shape = self.shape(name)
         var code = self._dtype_code_of(name)
+        if code == 11:
+            if len(shape) != 0:
+                raise Error("attrs: string array attributes are not supported")
+            var text = self.get_string(name)
+            var bytes = List[UInt8]()
+            for b in text.as_bytes():
+                bytes.append(b)
+            return AttrValue("string", shape^, code, bytes^)
         var n = 1
         for d in shape:
             n *= d
@@ -1102,6 +1289,117 @@ struct Dataset[
             _hdf5_type_id[dtype](self._lib[]),
             data.unsafe_bitcast[NoneType](),
         )
+        if rc < 0:
+            raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
+
+    def read_strings(self) raises -> List[String]:
+        """Read a string dataset (variable- or fixed-length) as a flat list in
+        row-major order (a scalar string dataset gives a one-element list)."""
+        if self._dtype_code != 11:
+            raise Error("Dataset: '" + self._name + "' is not a string dataset")
+        var n = self.size()
+        var result = List[String]()
+        if n == 0:
+            return result^
+        var ftid = self._lib[].get_dataset_type(self._did)
+        var rc: herr_t
+        if self._lib[].is_variable_string(ftid):
+            var mtid = self._lib[].create_string_type(0)
+            var slots = unsafe_alloc[Int](n)
+            for i in range(n):
+                slots[unsafe_offset=i] = 0
+            rc = self._lib[].read_dataset(
+                self._did, mtid, slots.unsafe_bitcast[NoneType]()
+            )
+            for i in range(n):
+                if rc >= 0 and slots[unsafe_offset=i] != 0:
+                    result.append(_string_at(slots[unsafe_offset=i]))
+                    self._lib[].free_memory(slots[unsafe_offset=i])
+                else:
+                    result.append(String())
+            slots.unsafe_free()
+            _ = self._lib[].close_type(mtid)
+        else:
+            var size = Int(self._lib[].get_type_size(ftid))
+            var pad = self._lib[].get_string_pad(ftid)
+            var buf = unsafe_alloc[UInt8](n * size + 1)
+            for i in range(n * size + 1):
+                buf[unsafe_offset=i] = 0
+            rc = self._lib[].read_dataset(
+                self._did, ftid, buf.unsafe_bitcast[NoneType]()
+            )
+            if rc >= 0:
+                for i in range(n):
+                    result.append(
+                        _decode_fixed_string(buf, i * size, size, pad)
+                    )
+            buf.unsafe_free()
+        _ = self._lib[].close_type(ftid)
+        if rc < 0:
+            raise Error("Dataset: H5Dread failed for '" + self._name + "'")
+        return result^
+
+    def write_strings(self, values: List[String]) raises:
+        """Write a flat list of strings (row-major) to a string dataset.
+
+        For fixed-length datasets each string must fit in the element size.
+        """
+        if self._dtype_code != 11:
+            raise Error("Dataset: '" + self._name + "' is not a string dataset")
+        var n = self.size()
+        if len(values) != n:
+            raise Error(
+                "Dataset: expected "
+                + String(n)
+                + " strings, got "
+                + String(len(values))
+            )
+        if n == 0:
+            return
+        var ftid = self._lib[].get_dataset_type(self._did)
+        var rc: herr_t
+        if self._lib[].is_variable_string(ftid):
+            var mtid = self._lib[].create_string_type(0)
+            var total = 0
+            for v in values:
+                total += len(v.as_bytes()) + 1
+            var arena = unsafe_alloc[UInt8](total)
+            var slots = unsafe_alloc[Int](n)
+            var pos = 0
+            for i in range(n):
+                var bytes = values[i].as_bytes()
+                slots[unsafe_offset=i] = Int(arena) + pos
+                for j in range(len(bytes)):
+                    arena[unsafe_offset=pos + j] = bytes[j]
+                arena[unsafe_offset=pos + len(bytes)] = 0
+                pos += len(bytes) + 1
+            rc = self._lib[].write_dataset(
+                self._did, mtid, slots.unsafe_bitcast[NoneType]()
+            )
+            slots.unsafe_free()
+            arena.unsafe_free()
+            _ = self._lib[].close_type(mtid)
+        else:
+            var size = Int(self._lib[].get_type_size(ftid))
+            for v in values:
+                if len(v.as_bytes()) > size:
+                    _ = self._lib[].close_type(ftid)
+                    raise Error(
+                        "Dataset: string longer than fixed length "
+                        + String(size)
+                    )
+            var buf = unsafe_alloc[UInt8](n * size)
+            for i in range(n * size):
+                buf[unsafe_offset=i] = 0
+            for i in range(n):
+                var bytes = values[i].as_bytes()
+                for j in range(len(bytes)):
+                    buf[unsafe_offset=i * size + j] = bytes[j]
+            rc = self._lib[].write_dataset(
+                self._did, ftid, buf.unsafe_bitcast[NoneType]()
+            )
+            buf.unsafe_free()
+        _ = self._lib[].close_type(ftid)
         if rc < 0:
             raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
 
@@ -1748,6 +2046,148 @@ struct Group[
         if rc < 0:
             raise Error("Group: cannot delete '" + member_name + "'")
 
+    def move(self, source: String, dest: String) raises:
+        """Move or rename a member (like ``h5py.Group.move``).
+
+        Both paths are relative to this group (or absolute); the destination's
+        parent group must already exist.
+        """
+        if self._lib[].move_link(self._gid, source, self._gid, dest) < 0:
+            raise Error("Group: cannot move '" + source + "' to '" + dest + "'")
+
+    def copy(self, source: String, dest: String) raises:
+        """Deep-copy an object (and its attributes) within this file.
+
+        The destination must not exist and its parent group must exist.
+        """
+        if self._lib[].copy_object(self._gid, source, self._gid, dest) < 0:
+            raise Error("Group: cannot copy '" + source + "' to '" + dest + "'")
+
+    def create_soft_link(self, name: String, target: String) raises:
+        """Create `name` as a soft link (path alias) to `target`."""
+        if self._lib[].create_soft_link(target, self._gid, name) < 0:
+            raise Error("Group: cannot create soft link '" + name + "'")
+
+    def create_hard_link(self, name: String, target: String) raises:
+        """Create `name` as another hard link to the existing object `target`.
+        """
+        if not self._lib[].object_exists(self._gid, target):
+            raise Error("Group: link target '" + target + "' not found")
+        if self._lib[].create_hard_link(self._gid, target, self._gid, name) < 0:
+            raise Error("Group: cannot create hard link '" + name + "'")
+
+    def create_external_link(
+        self, name: String, filename: String, path: String
+    ) raises:
+        """Create `name` as a link to `path` inside another HDF5 file."""
+        if (
+            self._lib[].create_external_link(filename, path, self._gid, name)
+            < 0
+        ):
+            raise Error("Group: cannot create external link '" + name + "'")
+
+    def get_link(self, name: String) raises -> LinkInfo:
+        """Describe the link `name` without following it (h5py's
+        ``get(name, getlink=True)``)."""
+        var kind = self._lib[].get_link_kind(self._gid, name)
+        if kind < 0:
+            raise Error("Group: link '" + name + "' not found")
+        if kind == 0:
+            return LinkInfo("hard")
+        var value = self._lib[].get_link_value(self._gid, name)
+        if kind == 1 and len(value) == 1:
+            return LinkInfo("soft", value[0])
+        if kind == 64 and len(value) == 2:
+            return LinkInfo("external", value[1], value[0])
+        raise Error("Group: cannot read link '" + name + "'")
+
+    def create_dataset_like(
+        self, name: String, other: String
+    ) raises -> Dataset[Self.origin]:
+        """Create an empty dataset with the same dtype, shape, maxshape,
+        chunking, filters and fill value as the existing dataset at path
+        `other` in this file (no data is copied).
+
+        `other` is a path rather than a `Dataset` because Mojo does not allow
+        passing a dataset opened from this same file back into one of its
+        methods.
+        """
+        var src = self._lib[].open_object(self._gid, other)
+        if src < 0 or self._lib[].get_object_type(src) != H5I_DATASET:
+            if src >= 0:
+                _ = self._lib[].close_object(src)
+            raise Error("create_dataset_like: '" + other + "' is not a dataset")
+        var tid = self._lib[].get_dataset_type(src)
+        var sid = self._lib[].get_dataset_space(src)
+        var dcpl = self._lib[].get_dcpl(src)
+        var read_shape = List[Int]()
+        var dtype_code = 0
+        if tid >= 0 and sid >= 0:
+            var ndims = Int(self._lib[].get_space_ndims(sid))
+            if ndims > 0:
+                var dims = self._lib[].get_space_dims(sid, ndims)
+                for i in range(ndims):
+                    read_shape.append(Int(dims[unsafe_offset=i]))
+                dims.unsafe_free()
+            dtype_code = _infer_dtype_code(
+                self._lib[],
+                tid,
+                self._lib[].get_type_class(tid),
+                Int(self._lib[].get_type_size(tid)),
+            )
+        var did = hid_t(-1)
+        if tid >= 0 and sid >= 0 and dcpl >= 0:
+            did = self._lib[].create_dataset_with_dcpl(
+                self._gid, name, tid, sid, dcpl
+            )
+        if tid >= 0:
+            _ = self._lib[].close_type(tid)
+        if sid >= 0:
+            _ = self._lib[].close_dataspace(sid)
+        if dcpl >= 0:
+            _ = self._lib[].close_dcpl(dcpl)
+        _ = self._lib[].close_object(src)
+        if did < 0:
+            raise Error(
+                "create_dataset_like: H5Dcreate2 failed for '" + name + "'"
+            )
+        var full_name = self._name
+        if full_name == "/":
+            full_name = "/" + name
+        else:
+            full_name = full_name + "/" + name
+        return Dataset[Self.origin](
+            self._lib, did, read_shape, dtype_code, full_name, self._filename
+        )
+
+    def visit_names(self) raises -> List[String]:
+        """Paths (relative to this group) of every object below it, found
+        recursively through hard links; each object is listed once and soft
+        or external links are not followed."""
+        var seen = List[String]()
+        var out = List[String]()
+        var self_key = self._lib[].object_key(self._gid, ".")
+        if self_key != "":
+            seen.append(self_key)
+        _walk_group(self._lib[], self._gid, "", seen, out)
+        return out^
+
+    def visit[
+        func: def(String) raises capturing -> Bool
+    ](self) raises -> Optional[String]:
+        """Call `func(name)` for every object below this group (see
+        `visit_names`). Stops early and returns the name for which `func`
+        returned `True`; returns `None` if the traversal completed.
+
+        `func` must be a plain (non-capturing) function; use `visit_names()`
+        to simply collect the paths. (No `visititems`: its callback would need
+        the file's internal origin type, which user code cannot name.)
+        """
+        for name in self.visit_names():
+            if func(name):
+                return Optional[String](name)
+        return None
+
     def len(self) raises -> Int:
         """Get the number of members in this group.
 
@@ -1812,19 +2252,7 @@ struct Group[
         return result^
 
     def _get_member_names(self) raises -> List[String]:
-        var result = List[String]()
-        var idx = 0
-        # Creation order when the group tracks it, otherwise name order.
-        var by_crt = self._lib[].tracks_creation_order(self._gid, False)
-        while True:
-            var member_name = self._lib[].get_link_name_by_idx(
-                self._gid, idx, by_crt
-            )
-            if member_name == "":
-                break
-            result.append(member_name)
-            idx += 1
-        return result^
+        return _member_names_of(self._lib[], self._gid)
 
     def __getitem__(self, member_name: String) raises -> H5Object[Self.origin]:
         """Get a member (group or dataset) by name.
@@ -2154,6 +2582,52 @@ struct Group[
             full_name,
             self._filename,
         )
+
+    def create_string_dataset(
+        self, name: String, shape: List[Int], fixed_length: Int = 0
+    ) raises -> Dataset[Self.origin]:
+        """Create an (empty) UTF-8 string dataset.
+
+        Args:
+            name: Dataset name.
+            shape: Dimensions; `[]` makes a scalar string dataset.
+            fixed_length: Element size in bytes for fixed-length strings; 0
+                (default) makes variable-length strings, as h5py does for
+                `str` data.
+        """
+        var sid = self._create_dataspace_for_shape(shape)
+        var tid = self._lib[].create_string_type(fixed_length)
+        if sid < 0 or tid < 0:
+            if sid >= 0:
+                _ = self._lib[].close_dataspace(sid)
+            if tid >= 0:
+                _ = self._lib[].close_type(tid)
+            raise Error("create_string_dataset: type/dataspace creation failed")
+        var did = self._lib[].create_dataset(self._gid, name, tid, sid)
+        _ = self._lib[].close_type(tid)
+        _ = self._lib[].close_dataspace(sid)
+        if did < 0:
+            raise Error(
+                "create_string_dataset: H5Dcreate2 failed for '" + name + "'"
+            )
+        var full_name = self._name
+        if full_name == "/":
+            full_name = "/" + name
+        else:
+            full_name = full_name + "/" + name
+        return Dataset[Self.origin](
+            self._lib, did, shape.copy(), 11, full_name, self._filename
+        )
+
+    def create_dataset_with_strings(
+        self, name: String, values: List[String], fixed_length: Int = 0
+    ) raises -> Dataset[Self.origin]:
+        """Create a 1-D string dataset holding `values`."""
+        var shape = List[Int]()
+        shape.append(len(values))
+        var dset = self.create_string_dataset(name, shape, fixed_length)
+        dset.write_strings(values)
+        return dset^
 
     def create_scalar_dataset[
         dtype: DType
@@ -2687,6 +3161,58 @@ struct File(Copyable, Movable):
         if rc < 0:
             raise Error("File: cannot delete '" + member_name + "'")
 
+    def _root(self) -> Group[origin_of(self._lib[])]:
+        return Group[origin_of(self._lib[])](
+            self._lib_ptr(), self._fid, "/", is_file=True
+        )
+
+    def move(self, source: String, dest: String) raises:
+        """Move or rename an object; see ``Group.move``."""
+        self._root().move(source, dest)
+
+    def copy_object(self, source: String, dest: String) raises:
+        """Deep-copy an object within the file; see ``Group.copy``.
+
+        (Named `copy_object` because `File.copy()` duplicates the `File`
+        handle itself.)
+        """
+        self._root().copy(source, dest)
+
+    def create_soft_link(self, name: String, target: String) raises:
+        """Create a soft link at the root level."""
+        self._root().create_soft_link(name, target)
+
+    def create_hard_link(self, name: String, target: String) raises:
+        """Create another hard link to an existing object."""
+        self._root().create_hard_link(name, target)
+
+    def create_external_link(
+        self, name: String, filename: String, path: String
+    ) raises:
+        """Create an external link at the root level."""
+        self._root().create_external_link(name, filename, path)
+
+    def get_link(self, name: String) raises -> LinkInfo:
+        """Describe a root-level link without following it."""
+        return self._root().get_link(name)
+
+    def create_dataset_like(
+        self, name: String, other: String
+    ) raises -> Dataset[origin_of(self._lib[])]:
+        """Create an empty root-level dataset shaped like the dataset at
+        path `other`; see ``Group.create_dataset_like``."""
+        return self._root().create_dataset_like(name, other)
+
+    def visit_names(self) raises -> List[String]:
+        """Paths of every object in the file; see ``Group.visit_names``."""
+        return self._root().visit_names()
+
+    def visit[
+        func: def(String) raises capturing -> Bool
+    ](self) raises -> Optional[String]:
+        """Call `func(name)` for every object; see ``Group.visit``."""
+        return self._root().visit[func]()
+
     def len(self) raises -> Int:
         """Get the number of members at the root level.
 
@@ -2864,6 +3390,21 @@ struct File(Copyable, Movable):
             shuffle=shuffle,
             fletcher32=fletcher32,
             track_order=track_order,
+        )
+
+    def create_string_dataset(
+        self, name: String, shape: List[Int], fixed_length: Int = 0
+    ) raises -> Dataset[origin_of(self._lib[])]:
+        """Create a root-level string dataset; see
+        ``Group.create_string_dataset``."""
+        return self._root().create_string_dataset(name, shape, fixed_length)
+
+    def create_dataset_with_strings(
+        self, name: String, values: List[String], fixed_length: Int = 0
+    ) raises -> Dataset[origin_of(self._lib[])]:
+        """Create a root-level 1-D string dataset holding `values`."""
+        return self._root().create_dataset_with_strings(
+            name, values, fixed_length
         )
 
     def create_scalar_dataset[

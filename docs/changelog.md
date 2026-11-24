@@ -1,5 +1,24 @@
 # Changelog
 
+## v0.4.0
+
+- Strings: scalar string attributes (`attrs().set_string` / `get_string`),
+  string datasets of any shape (`create_string_dataset`,
+  `create_dataset_with_strings`, `read_strings`, `write_strings`), variable-length
+  UTF-8 by default or fixed-length with `fixed_length=`. Reads variable- and
+  fixed-length strings written by h5py (null-terminated, null- or space-padded).
+  String attributes also appear in `items()`/`values()`/`get_value()`
+  (`AttrValue.as_string()`); `Dataset.dtype()` reports `"string"`.
+
+- Links: `create_soft_link`, `create_hard_link`, `create_external_link` and
+  `get_link(name) -> LinkInfo` on `File` and `Group`.
+- `move(source, dest)` and `copy(source, dest)` (`File.copy_object`) for
+  objects within a file.
+- `create_dataset_like(name, other_path)`: empty dataset with the same dtype,
+  shape, maxshape, chunking, filters and fill value.
+- Traversal: `visit_names()` (recursive object paths; each object once; soft
+  and external links not followed) and `visit[func]()` with early stop.
+
 ## v0.3.0
 
 - New dtypes: `int16`, `uint16`, `uint32`, `uint64`, `float16`. Unsigned 32/64-bit
