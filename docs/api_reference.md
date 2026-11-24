@@ -200,8 +200,17 @@ Represents an HDF5 dataset containing array data.
 | `read_strings() -> List[String]` | Read a string dataset (variable- or fixed-length) as a flat row-major list. |
 | `write_strings(values)` | Write a flat list of strings (fixed-length datasets reject strings that do not fit). |
 | `write_scalar[dtype](value)` | Write a scalar dataset's value. |
-| `dset.__getitem__[dtype](())` (i.e. `dset[()]`) | h5py-style empty-tuple read of a scalar dataset. |
-| `dset.__setitem__[dtype]((), value)` (i.e. `dset[()] = value`) | h5py-style empty-tuple write of a scalar dataset. |
+| `dset[()].read_scalar[dtype]()` | h5py-style read of a scalar dataset. |
+| `dset[()] = value` | h5py-style write of a scalar dataset. |
+
+**Indexing (`Selection`)**
+
+| Syntax | Description |
+|--------|-------------|
+| `dset[1:3, 2]`, `dset[..., 0]`, `dset[-1, 2:]` | Lazy `Selection`; ints drop their axis. |
+| `sel.read[dtype]()` / `sel.read_scalar[dtype]()` | Read into an `NDArray` / a single value. |
+| `dset[0:3, 1] = arr` / `= scalar` | Write; a one-element value is broadcast. |
+| `obj.attrs["k"] = v`, `obj.attrs["k"].as_scalar[dtype]()` | Attribute item access on `File`/`Group`/`Dataset`. |
 
 **Hyperslab, slice, and point I/O**
 

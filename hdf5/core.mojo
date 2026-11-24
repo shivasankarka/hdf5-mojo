@@ -34,6 +34,9 @@ from std.memory import ArcPointer, OwnedPointer, Pointer
 from std.memory.alloc import unsafe_alloc
 from std.sys import size_of
 from std.utils import Variant
+from std.builtin.builtin_slice import ContiguousSlice
+from std.builtin.rebind import rebind
+from std.builtin.type_aliases import EllipsisType
 from numojo import NDArray, Item, Shape
 
 comptime MutExt = MutUntrackedOrigin
@@ -303,6 +306,65 @@ struct AttrValue(Copyable, Movable):
         self._code = code
         self._data = data^
 
+    @implicit
+    def __init__[
+        dt: DType, //
+    ](out self, value: Scalar[dt]) raises where SupportedDType[dt]:
+        """A scalar attribute value, e.g. `attrs["n"] = Int32(3)`."""
+        self.dtype = _dtype_name(_dtype_code[dt]())
+        self.shape = List[Int]()
+        self._code = _dtype_code[dt]()
+        self._data = List[UInt8]()
+        var p = Pointer(to=value).unsafe_bitcast[UInt8]()
+        for i in range(size_of[Scalar[dt]]()):
+            self._data.append(p[unsafe_offset=i])
+
+    @implicit
+    def __init__(out self, value: Int):
+        """An `Int` becomes an int64 attribute (like Python ints in h5py)."""
+        self.dtype = "int64"
+        self.shape = List[Int]()
+        self._code = 3
+        self._data = List[UInt8]()
+        var v = Int64(value)
+        var p = Pointer(to=v).unsafe_bitcast[UInt8]()
+        for i in range(8):
+            self._data.append(p[unsafe_offset=i])
+
+    @implicit
+    def __init__(out self, value: String):
+        """A scalar string attribute."""
+        self.dtype = "string"
+        self.shape = List[Int]()
+        self._code = 11
+        self._data = List[UInt8]()
+        for b in value.as_bytes():
+            self._data.append(b)
+
+    @implicit
+    def __init__(out self, value: StringLiteral):
+        self.dtype = "string"
+        self.shape = List[Int]()
+        self._code = 11
+        self._data = List[UInt8]()
+        for b in String(value).as_bytes():
+            self._data.append(b)
+
+    @implicit
+    def __init__[
+        dt: DType, //
+    ](out self, value: NDArray[dt]) raises where SupportedDType[dt]:
+        """An array attribute, e.g. `attrs["scale"] = arr`."""
+        self.dtype = _dtype_name(_dtype_code[dt]())
+        self.shape = List[Int]()
+        for i in range(value.shape.ndim):
+            self.shape.append(value.shape[i])
+        self._code = _dtype_code[dt]()
+        self._data = List[UInt8]()
+        var p = value.unsafe_ptr().unsafe_bitcast[UInt8]()
+        for i in range(value.size * size_of[Scalar[dt]]()):
+            self._data.append(p[unsafe_offset=i])
+
     def is_scalar(self) -> Bool:
         return len(self.shape) == 0
 
@@ -472,10 +534,23 @@ struct AttributeManager[
 
     var _loc_id: hid_t
     var _lib: LibRef[Self.origin]
+    var _keepalive: Optional[ArcPointer[_ObjHandle]]
+    """Keeps the owning group/dataset open while this manager is in use
+    (e.g. `g.attrs()["x"] = 1`, where `g` is otherwise dead)."""
 
-    def __init__(out self, lib: LibRef[Self.origin], loc_id: hid_t):
+    def __init__(
+        out self,
+        lib: LibRef[Self.origin],
+        loc_id: hid_t,
+        keepalive: Optional[ArcPointer[_ObjHandle]] = None,
+    ):
         self._loc_id = loc_id
         self._lib = lib
+        self._keepalive = keepalive.copy()
+
+    def __call__(self) -> Self:
+        """`obj.attrs()` still works: returns this manager."""
+        return self.copy()
 
     def __contains__(self, name: String) -> Bool:
         """Check if an attribute exists.
@@ -492,39 +567,55 @@ struct AttributeManager[
             return True
         return False
 
-    def __getitem__[dtype: DType](self, name: String) raises -> Scalar[dtype]:
-        """Read a scalar attribute value.
-
-        Parameters:
-            dtype: The data type to read as (e.g., DType.float64, DType.int32).
-
-        Args:
-            name: Name of the attribute to read.
-
-        Returns:
-            The attribute value as Scalar[dtype].
+    def __getitem__(self, name: String) raises -> AttrValue:
+        """Read an attribute of any supported dtype/shape (h5py's
+        `attrs[name]`); extract with `as_scalar[dtype]()`, `as_array[dtype]()`
+        or `as_string()`.
 
         Raises:
             Error: If the attribute does not exist or read fails.
         """
-        return self.read_scalar[dtype](name)
+        return self.get_value(name)
 
-    def __setitem__[
-        dtype: DType
-    ](mut self, name: String, value: Scalar[dtype]) raises:
-        """Write a scalar attribute value.
+    def __setitem__(self, name: String, value: AttrValue) raises:
+        """Write an attribute (h5py's `attrs[name] = value`).
 
-        Parameters:
-            dtype: The data type to read as (e.g., DType.float64, DType.int32).
-
-        Args:
-            name: Name of the attribute to write.
-            value: The value to write.
-
-        Raises:
-            Error: If writing fails.
+        Accepts any scalar, `Int` (stored as int64), `String`/string
+        literal, or `NDArray`; an existing attribute is overwritten.
         """
-        self.write_scalar[dtype](name, value)
+        self._write_value(name, value)
+
+    def _write_value(self, name: String, value: AttrValue) raises:
+        if value._code == 11:
+            self.set_string(name, value.as_string())
+            return
+        if self.__contains__(name):
+            self.delete(name)
+        var sid: hid_t
+        if value.is_scalar():
+            sid = self._lib[].create_attr_dataspace_scalar()
+        else:
+            var ndims = len(value.shape)
+            var dims = unsafe_alloc[hsize_t](ndims)
+            for i in range(ndims):
+                dims[unsafe_offset=i] = hsize_t(value.shape[i])
+            sid = self._lib[].create_dataspace_nd(ndims, dims)
+            dims.unsafe_free()
+        if sid < 0:
+            raise Error("attrs: dataspace creation failed")
+        var rc = self._lib[].write_attr(
+            self._loc_id,
+            name,
+            _type_id_for_code(self._lib[], value._code),
+            sid,
+            value._data.unsafe_ptr()
+            .unsafe_bitcast[NoneType]()
+            .unsafe_mut_cast[True]()
+            .unsafe_origin_cast[MutExt](),
+        )
+        _ = self._lib[].close_dataspace(sid)
+        if rc < 0:
+            raise Error("attrs: write failed for '" + name + "'")
 
     def read_scalar[dtype: DType](self, name: String) raises -> Scalar[dtype]:
         """Read a scalar attribute value.
@@ -915,6 +1006,249 @@ struct AttributeManager[
 
 
 # ===----------------------------------------------------------------------=== #
+# Object handle (shared ownership of an open dataset/group id)
+# ===----------------------------------------------------------------------=== #
+
+
+# TODO(mojo 1.3): `Group`/`Dataset` use a shared ArcPointer handle because
+# `with` and implicit copies need `Copyable`; revisit (e.g. a move-only handle
+# with `with ... as`) once that requirement is lifted.
+struct _ObjHandle(Movable):
+    """Shared owner of an open dataset or group id; closes it when the last
+    `Dataset`/`Group` copy goes away (or earlier via `close()`)."""
+
+    var lib: Pointer[HDF5Lib, MutExt]
+    var id: hid_t
+    var kind: Int
+    """0 = dataset, 1 = group, 2 = borrowed id that is never closed."""
+    var is_open: Bool
+
+    def __init__(out self, lib: Pointer[HDF5Lib, MutExt], id: hid_t, kind: Int):
+        self.lib = lib
+        self.id = id
+        self.kind = kind
+        self.is_open = id >= 0
+
+    def close(mut self):
+        if self.is_open:
+            if self.kind == 0:
+                _ = self.lib[].close_dataset(self.id)
+            elif self.kind == 1:
+                _ = self.lib[].close_group(self.id)
+            self.is_open = False
+
+    def __deinit__(deinit self):
+        if self.is_open:
+            if self.kind == 0:
+                _ = self.lib[].close_dataset(self.id)
+            elif self.kind == 1:
+                _ = self.lib[].close_group(self.id)
+
+
+# ===----------------------------------------------------------------------=== #
+# Indexing: Selection
+# ===----------------------------------------------------------------------=== #
+
+
+struct _Plan(Copyable, Movable):
+    """A parsed `dset[...]` index: hyperslab start/count per dataset axis and
+    the shape of the result (integer-indexed axes dropped)."""
+
+    var start: List[Int]
+    var count: List[Int]
+    var shape: List[Int]
+
+    def __init__(out self):
+        self.start = List[Int]()
+        self.count = List[Int]()
+        self.shape = List[Int]()
+
+    def add_int(mut self, index: Int, dim: Int) raises:
+        var i = index + dim if index < 0 else index
+        if i < 0 or i >= dim:
+            raise Error(
+                "index "
+                + String(index)
+                + " out of bounds for axis of size "
+                + String(dim)
+            )
+        self.start.append(i)
+        self.count.append(1)
+
+    def add_slice(
+        mut self,
+        start: Optional[Int],
+        end: Optional[Int],
+        step: Optional[Int],
+        dim: Int,
+    ) raises:
+        if step and step.value() != 1:
+            raise Error("slice steps other than 1 are not supported yet")
+        var s = start.or_else(0)
+        var e = end.or_else(dim)
+        if s < 0:
+            s += dim
+        if e < 0:
+            e += dim
+        s = min(max(s, 0), dim)
+        e = min(max(e, s), dim)
+        self.start.append(s)
+        self.count.append(e - s)
+        self.shape.append(e - s)
+
+    def add_full(mut self, dim: Int):
+        self.start.append(0)
+        self.count.append(dim)
+        self.shape.append(dim)
+
+
+def _plan_index[*Ts: AnyType](shape: List[Int], *idx: *Ts) raises -> _Plan:
+    """Turn `Int` / slice / `...` / `()` index items into a `_Plan`."""
+    var n_spec = 0
+    var n_ellipsis = 0
+    comptime for k in range(idx.__len__()):
+        comptime if Ts[k] == Int or Ts[k] == ContiguousSlice or Ts[k] == Slice:
+            n_spec += 1
+        elif Ts[k] == EllipsisType:
+            n_ellipsis += 1
+    var ndim = len(shape)
+    if n_spec > ndim:
+        raise Error(
+            "too many indices: "
+            + String(n_spec)
+            + " for "
+            + String(ndim)
+            + "-d dataset"
+        )
+    if n_ellipsis > 1:
+        raise Error("an index can only have a single ellipsis")
+    var plan = _Plan()
+    var axis = 0
+    comptime for k in range(idx.__len__()):
+        comptime if Ts[k] == Int:
+            plan.add_int(rebind[Int](idx[k]), shape[axis])
+            axis += 1
+        elif Ts[k] == ContiguousSlice:
+            var sl = rebind[ContiguousSlice](idx[k])
+            plan.add_slice(sl.start, sl.end, None, shape[axis])
+            axis += 1
+        elif Ts[k] == Slice:
+            var sl = rebind[Slice](idx[k])
+            plan.add_slice(sl.start, sl.end, sl.step, shape[axis])
+            axis += 1
+        elif Ts[k] == EllipsisType:
+            for _ in range(ndim - n_spec):
+                plan.add_full(shape[axis])
+                axis += 1
+    while axis < ndim:
+        plan.add_full(shape[axis])
+        axis += 1
+    return plan^
+
+
+struct Selection(Movable):
+    """A lazy region of a `Dataset`, returned by `dset[...]`.
+
+    Read it with `.read[dtype]()`; assign to it via `dset[...] = value`
+    (values are converted to a `Selection` implicitly from an `NDArray` or a
+    scalar).
+    """
+
+    var _dset: Optional[Dataset[MutExt]]
+    var _plan: _Plan
+    var _code: Int
+    var _data: List[UInt8]
+
+    def __init__(out self, var dset: Dataset[MutExt], var plan: _Plan):
+        self._dset = dset^
+        self._plan = plan^
+        self._code = -1
+        self._data = List[UInt8]()
+
+    @implicit
+    def __init__[
+        dt: DType, //
+    ](out self, arr: NDArray[dt]) raises where SupportedDType[dt]:
+        self._dset = None
+        self._plan = _Plan()
+        self._code = _dtype_code[dt]()
+        self._data = List[UInt8]()
+        var p = arr.unsafe_ptr().unsafe_bitcast[UInt8]()
+        for i in range(arr.size * size_of[Scalar[dt]]()):
+            self._data.append(p[unsafe_offset=i])
+
+    @implicit
+    def __init__[
+        dt: DType, //
+    ](out self, value: Scalar[dt]) raises where SupportedDType[dt]:
+        self._dset = None
+        self._plan = _Plan()
+        self._code = _dtype_code[dt]()
+        self._data = List[UInt8]()
+        var p = Pointer(to=value).unsafe_bitcast[UInt8]()
+        for i in range(size_of[Scalar[dt]]()):
+            self._data.append(p[unsafe_offset=i])
+
+    @implicit
+    def __init__(out self, value: Int):
+        self._dset = None
+        self._plan = _Plan()
+        self._code = 3
+        self._data = List[UInt8]()
+        var v = Int64(value)
+        var p = Pointer(to=v).unsafe_bitcast[UInt8]()
+        for i in range(8):
+            self._data.append(p[unsafe_offset=i])
+
+    def shape(self) -> List[Int]:
+        """Shape of the selected region (integer-indexed axes dropped)."""
+        return self._plan.shape.copy()
+
+    def size(self) -> Int:
+        """Number of selected elements."""
+        var n = 1
+        for c in self._plan.count:
+            n *= c
+        return n
+
+    def read[
+        dtype: DType
+    ](self) raises -> NDArray[dtype] where SupportedDType[dtype]:
+        """Read the region into an NDArray (rank = number of slice axes)."""
+        if not self._dset:
+            raise Error("Selection: not bound to a dataset")
+        if len(self._plan.shape) == 0:
+            raise Error("Selection: scalar result; use read_scalar[dtype]()")
+        if self.size() == 0:
+            raise Error("Selection: empty selections are not supported")
+        var arr = NDArray[dtype](Shape(self._plan.shape))
+        self._dset.value().read_hyperslab[dtype](
+            self._plan.start,
+            self._plan.count,
+            arr.unsafe_ptr().unsafe_origin_cast[MutExt](),
+        )
+        return arr^
+
+    def read_scalar[
+        dtype: DType
+    ](self) raises -> Scalar[dtype] where SupportedDType[dtype]:
+        """Read a single element (all axes integer-indexed, or `dset[()]`)."""
+        if not self._dset:
+            raise Error("Selection: not bound to a dataset")
+        if self.size() != 1:
+            raise Error("Selection: not a single element; use read[dtype]()")
+        if len(self._dset.value()._shape) == 0:
+            return self._dset.value().read_scalar[dtype]()
+        var buf = unsafe_alloc[Scalar[dtype]](1)
+        self._dset.value().read_hyperslab[dtype](
+            self._plan.start, self._plan.count, buf
+        )
+        var v = buf[unsafe_offset=0]
+        buf.unsafe_free()
+        return v
+
+
+# ===----------------------------------------------------------------------=== #
 # Dataset
 # ===----------------------------------------------------------------------=== #
 
@@ -952,6 +1286,9 @@ struct Dataset[
     var _filename: String
     var _lib: LibRef[Self.origin]
     var _closed_bool: Bool
+    var _handle: ArcPointer[_ObjHandle]
+    var attrs: AttributeManager[Self.origin]
+    """Attributes of this dataset: `dset.attrs["units"] = "m"`."""
 
     def __init__(
         out self,
@@ -969,6 +1306,46 @@ struct Dataset[
         self._filename = filename
         self._lib = lib
         self._closed_bool = False
+        self._handle = ArcPointer(
+            _ObjHandle(
+                Pointer[HDF5Lib, MutExt](unsafe_from_address=Int(lib)), did, 0
+            )
+        )
+        self.attrs = AttributeManager[Self.origin](lib, did, self._handle)
+
+    def __init__(
+        out self,
+        lib: LibRef[Self.origin],
+        did: hid_t,
+        shape: List[Int],
+        dtype_code: Int,
+        name: String,
+        filename: String,
+        *,
+        handle: ArcPointer[_ObjHandle],
+    ):
+        self._did = did
+        self._shape = shape.copy()
+        self._dtype_code = dtype_code
+        self._name = name
+        self._filename = filename
+        self._lib = lib
+        self._closed_bool = False
+        self._handle = handle
+        self.attrs = AttributeManager[Self.origin](lib, did, handle)
+
+    def __deinit__(deinit self):
+        # An explicit destructor keeps the whole object (including the shared
+        # handle) alive until its last use; without it Mojo destroys the
+        # unused `_handle` field early and closes the id too soon.
+        pass
+
+    def __enter__(self) -> Self:
+        """Enter a ``with`` block; the dataset is closed on exit."""
+        return self.copy()
+
+    def __exit__(self):
+        self._handle[].close()
 
     def shape(self) -> List[Int]:
         """Get the shape of the dataset.
@@ -1025,14 +1402,6 @@ struct Dataset[
             The dataset path, e.g., "/group/subgroup/dataset".
         """
         return self._name
-
-    def attrs(self) -> AttributeManager[Self.origin]:
-        """Get the attribute manager for this dataset.
-
-        Returns:
-            An AttributeManager for reading/writing attributes.
-        """
-        return AttributeManager[Self.origin](self._lib, self._did)
 
     def chunks(self) -> List[Int]:
         """Get the chunk shape of the dataset.
@@ -1426,32 +1795,124 @@ struct Dataset[
         self.write[dtype](buf, 1)
         buf.unsafe_free()
 
-    def __getitem__[
-        dtype: DType
-    ](self, index: Tuple[]) raises -> Scalar[dtype] where SupportedDType[dtype]:
-        """Read a scalar dataset value via h5py-style empty-tuple indexing.
+    def __getitem__[*Ts: AnyType](self, *idx: *Ts) raises -> Selection:
+        """Select a region with h5py-style indexing, e.g. `dset[2:5, 0]`,
+        `dset[..., 1]` or `dset[()]`.
 
-        Mirrors ``h5py``'s ``dset[()]`` for scalar datasets.
-
-        Args:
-            index: Must be the empty tuple `()`.
+        Integers drop their axis, slices keep it, `...` expands to the
+        remaining axes. The returned `Selection` is lazy: finish with
+        `.read[dtype]()` (or `.read_scalar[dtype]()`).
         """
-        return self.read_scalar[dtype]()
+        var plan = _plan_index(self._shape, *idx)
+        # The selection must not outlive the file (it keeps no ownership).
+        var dset = Dataset[MutExt](
+            Pointer[HDF5Lib, MutExt](unsafe_from_address=Int(self._lib)),
+            self._did,
+            self._shape,
+            self._dtype_code,
+            self._name,
+            self._filename,
+            handle=self._handle,
+        )
+        return Selection(dset^, plan^)
 
-    def __setitem__[
-        dtype: DType
-    ](
-        mut self, index: Tuple[], value: Scalar[dtype]
-    ) raises where SupportedDType[dtype]:
-        """Write a scalar dataset value via h5py-style empty-tuple indexing.
+    def __setitem__[*Ts: AnyType](self, *idx: *Ts, value: Selection) raises:
+        """Write an `NDArray` or scalar into a region, e.g.
+        `dset[0:3, 1] = arr` or `dset[()] = Int32(7)`.
 
-        Mirrors ``h5py``'s ``dset[()] = value`` for scalar datasets.
-
-        Args:
-            index: Must be the empty tuple `()`.
-            value: The scalar value to write.
+        A one-element value is broadcast over the whole selection.
         """
-        self.write_scalar[dtype](value)
+        var plan = _plan_index(self._shape, *idx)
+        self._write_selection(plan, value)
+
+    def _write_selection(self, plan: _Plan, value: Selection) raises:
+        if value._code < 0:
+            raise Error("Dataset: assign an array or scalar value")
+        var item = _dtype_itemsize(value._code)
+        var n = 1
+        for c in plan.count:
+            n *= c
+        var have = len(value._data) // item
+        var tid = _type_id_for_code(self._lib[], value._code)
+        var buf = unsafe_alloc[UInt8](n * item)
+        if have == n:
+            for i in range(n * item):
+                buf[unsafe_offset=i] = value._data[i]
+        elif have == 1:
+            for i in range(n):
+                for j in range(item):
+                    buf[unsafe_offset=i * item + j] = value._data[j]
+        else:
+            buf.unsafe_free()
+            raise Error(
+                "Dataset: cannot write "
+                + String(have)
+                + " elements into a selection of "
+                + String(n)
+            )
+        try:
+            if len(self._shape) == 0:
+                var rc = self._lib[].write_dataset(
+                    self._did, tid, buf.unsafe_bitcast[NoneType]()
+                )
+                if rc < 0:
+                    raise Error(
+                        "Dataset: H5Dwrite failed for '" + self._name + "'"
+                    )
+            else:
+                self._write_raw(plan.start, plan.count, tid, buf)
+        except e:
+            buf.unsafe_free()
+            raise e^
+        buf.unsafe_free()
+
+    def _write_raw(
+        self,
+        start: List[Int],
+        count: List[Int],
+        tid: hid_t,
+        data: Pointer[UInt8, MutExt],
+    ) raises:
+        """Write a compact buffer of memory type `tid` into a hyperslab."""
+        var ndims = len(self._shape)
+        var start_dims = unsafe_alloc[hsize_t](ndims)
+        var count_dims = unsafe_alloc[hsize_t](ndims)
+        for i in range(ndims):
+            start_dims[unsafe_offset=i] = hsize_t(start[i])
+            count_dims[unsafe_offset=i] = hsize_t(count[i])
+        var file_space = self._lib[].get_dataset_space(self._did)
+        if file_space < 0:
+            start_dims.unsafe_free()
+            count_dims.unsafe_free()
+            raise Error("Dataset: H5Dget_space failed for '" + self._name + "'")
+        var rc = self._lib[].select_hyperslab(
+            file_space, start_dims, count_dims, ndims
+        )
+        start_dims.unsafe_free()
+        if rc < 0:
+            count_dims.unsafe_free()
+            _ = self._lib[].close_dataspace(file_space)
+            raise Error(
+                "Dataset: H5Sselect_hyperslab failed for '" + self._name + "'"
+            )
+        var mem_space = self._lib[].create_dataspace_nd(ndims, count_dims)
+        count_dims.unsafe_free()
+        if mem_space < 0:
+            _ = self._lib[].close_dataspace(file_space)
+            raise Error("Dataset: memory dataspace creation failed")
+        rc = self._lib[].write_dataset_selection(
+            self._did,
+            tid,
+            mem_space,
+            file_space,
+            data.unsafe_bitcast[NoneType](),
+        )
+        _ = self._lib[].close_dataspace(mem_space)
+        _ = self._lib[].close_dataspace(file_space)
+        if rc < 0:
+            raise Error(
+                "Dataset: H5Dwrite hyperslab failed for '" + self._name + "'"
+            )
 
     def read_hyperslab[
         dtype: DType
@@ -1857,10 +2318,11 @@ struct Dataset[
             raise Error("Dataset: H5Dwrite failed for '" + self._name + "'")
 
     def close(mut self):
-        if not self._closed_bool and self._did >= 0:
-            _ = self._lib[].close_dataset(self._did)
-            self._did = -1
-            self._closed_bool = True
+        """Close the dataset (all copies share the handle). Also happens
+        automatically when the last copy is destroyed."""
+        self._handle[].close()
+        self._did = -1
+        self._closed_bool = True
 
 
 # ===----------------------------------------------------------------------=== #
@@ -1901,6 +2363,9 @@ struct Group[
     var _lib: LibRef[Self.origin]
     var _is_file: Bool
     var _closed_bool: Bool
+    var _handle: ArcPointer[_ObjHandle]
+    var attrs: AttributeManager[Self.origin]
+    """Attributes of this group: `g.attrs["version"] = 2`."""
 
     def __init__(
         out self,
@@ -1916,6 +2381,27 @@ struct Group[
         self._lib = lib
         self._is_file = is_file
         self._closed_bool = False
+        self._handle = ArcPointer(
+            _ObjHandle(
+                Pointer[HDF5Lib, MutExt](unsafe_from_address=Int(lib)),
+                gid,
+                2 if is_file else 1,
+            )
+        )
+        self.attrs = AttributeManager[Self.origin](lib, gid, self._handle)
+
+    def __deinit__(deinit self):
+        # An explicit destructor keeps the whole object (including the shared
+        # handle) alive until its last use; without it Mojo destroys the
+        # unused `_handle` field early and closes the id too soon.
+        pass
+
+    def __enter__(self) -> Self:
+        """Enter a ``with`` block; the group is closed on exit."""
+        return self.copy()
+
+    def __exit__(self):
+        self._handle[].close()
 
     def name(self) -> String:
         """Get the full path name of the group in the HDF5 file.
@@ -1924,14 +2410,6 @@ struct Group[
             The group path, e.g., "/group/subgroup".
         """
         return self._name
-
-    def attrs(self) -> AttributeManager[Self.origin]:
-        """Get the attribute manager for this group.
-
-        Returns:
-            An AttributeManager for reading/writing attributes.
-        """
-        return AttributeManager[Self.origin](self._lib, self._gid)
 
     def file(self) -> String:
         """Get the filename this group belongs to.
@@ -1969,8 +2447,7 @@ struct Group[
         """
         if self._closed_bool:
             return
-        if not self._is_file and self._gid >= 0:
-            _ = self._lib[].close_group(self._gid)
+        self._handle[].close()
         self._gid = -1
         self._closed_bool = True
 
@@ -2254,6 +2731,14 @@ struct Group[
     def _get_member_names(self) raises -> List[String]:
         return _member_names_of(self._lib[], self._gid)
 
+    def dataset(self, member_name: String) raises -> Dataset[Self.origin]:
+        """Open a dataset by path (shortcut for `self[name].dataset()`)."""
+        return self._open_dataset(member_name)
+
+    def group(self, member_name: String) raises -> Group[Self.origin]:
+        """Open a subgroup by path (shortcut for `self[name].group()`)."""
+        return self[member_name].group()
+
     def __getitem__(self, member_name: String) raises -> H5Object[Self.origin]:
         """Get a member (group or dataset) by name.
 
@@ -2355,7 +2840,7 @@ struct Group[
                 self._lib,
                 current_gid,
                 current_path,
-                self._is_file,
+                True,  # borrows self's id, so never closes it
                 self._filename,
             )
 
@@ -2890,6 +3375,10 @@ struct H5Object[
             raise Error("H5Object: not a group")
         return self._value[Group[Self.origin]].copy()
 
+    def __getitem__(self, name: String) raises -> H5Object[Self.origin]:
+        """Chain lookups, e.g. `f["a"]["b"]` (this object must be a group)."""
+        return self.group()[name]
+
     def dataset(self) raises -> Dataset[Self.origin]:
         """Unwrap this object as a Dataset.
 
@@ -2968,6 +3457,8 @@ struct File(Copyable, Movable):
     var _fid: hid_t
     var _filename: String
     var _mode: String
+    var attrs: AttributeManager[MutExt]
+    """File-level attributes: `f.attrs["created"] = "2026"`."""
 
     def __init__(
         out self, path: String, mode: String = "r", track_order: Bool = False
@@ -3018,6 +3509,12 @@ struct File(Copyable, Movable):
 
         self._fid = fid
         self._handle = ArcPointer(_FileHandle(self._lib, fid))
+        self.attrs = AttributeManager[MutExt](
+            Pointer[HDF5Lib, MutExt](
+                unsafe_from_address=Int(Pointer(to=self._lib[]))
+            ),
+            fid,
+        )
 
     def __enter__(self) -> Self:
         """Enter a ``with`` block; the file is closed on exit."""
@@ -3063,16 +3560,6 @@ struct File(Copyable, Movable):
 
     def _lib_ptr(self) -> LibRef[origin_of(self._lib[])]:
         return Pointer(to=self._lib[])
-
-    def attrs(self) -> AttributeManager[origin_of(self._lib[])]:
-        """Get the attribute manager for the file root.
-
-        Returns:
-            An AttributeManager for reading/writing file-level attributes.
-        """
-        return AttributeManager[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid
-        )
 
     def name(self) -> String:
         """Get the name of the root group.
@@ -3272,6 +3759,18 @@ struct File(Copyable, Movable):
             self._lib_ptr(), self._fid, "/", is_file=True
         )
         return root.__getitem__(member_name)
+
+    def dataset(
+        self, member_name: String
+    ) raises -> Dataset[origin_of(self._lib[])]:
+        """Open a dataset by path (shortcut for `f[name].dataset()`)."""
+        return self._get_dataset(member_name)
+
+    def group(
+        self, member_name: String
+    ) raises -> Group[origin_of(self._lib[])]:
+        """Open a group by path (shortcut for `f[name].group()`)."""
+        return self[member_name].group()
 
     def _get_dataset(
         self, member_name: String

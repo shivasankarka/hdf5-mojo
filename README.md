@@ -27,7 +27,9 @@ I'm working on porting some particle physics simulation libraries to Mojo. Since
   plus filter metadata accessors (`compression()`, `shuffle()`, etc.)
 - Hyperslab, slice (`read_slice`/`write_slice`), and point
   (`read_point`/`write_point`) I/O on datasets
-- Scalar dataset support, including h5py-style `dset[()]` indexing
+- h5py-style indexing: `dset[1:3, 2].read[f64]()`, `dset[..., 0]`, `dset[0:3, 1] = arr`
+  (unit-stride slices, ints, `...`), and `f.attrs["k"] = v` attribute syntax
+- Scalar dataset support via `dset[()]`
 - `require_group` / `require_dataset` helpers, `get_opt()` for non-raising
   lookups
 - Automatic library discovery via pixi
