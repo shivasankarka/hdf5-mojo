@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased (UX)
+
+- h5py-style indexing: `dset[1:3, 2]`, `dset[..., 0]`, `dset[-1, 2:]`,
+  `dset[()]` return a lazy `Selection`; finish with `.read[f64]()` or
+  `.read_scalar[f64]()`. Integers drop their axis, `...` expands. Assign with
+  `dset[0:3, 1] = arr` or a scalar (a one-element value is broadcast).
+  Strided slices are not supported yet. A `Selection` does not own the
+  dataset; do not keep it past the file's lifetime.
+- Attribute item syntax: `f.attrs["n"] = 3`, `g.attrs["units"] = "m"`,
+  `d.attrs["scale"] = arr`, read with `f.attrs["n"].as_scalar[i64]()`.
+  `attrs` is now a field on `File`/`Group`/`Dataset`; `attrs()` still works.
+  `Int` is stored as int64, `Float64` as float64, etc. This replaces
+  `attrs[name]`/`attrs[name] = v` with an explicit dtype parameter.
+- `f.dataset("a/b")`, `f.group("a")`, and chaining `f["a"]["b"]`.
+- `Group` and `Dataset` close automatically when their last copy is destroyed,
+  and support `with`. `close()` still works (copies share the handle).
+  TODO: revisit with Mojo 1.3, where the `Copyable` requirement on `with` is
+  lifted.
+- Removed: `dset.__getitem__[dtype](())`; use `dset[()].read_scalar[dtype]()`.
+
 ## v0.4.0
 
 - Strings: scalar string attributes (`attrs().set_string` / `get_string`),

@@ -479,9 +479,9 @@ def test_scalar_dataset_tuple_indexing() raises:
     var f = File("tests/test_scalar_tuple_indexing.h5", "w")
 
     var dset = f.create_scalar_dataset[DType.int32]("scalar", Int32(0))
-    dset.__setitem__[DType.int32]((), Int32(7))
+    dset[()] = Int32(7)
     assert_equal(
-        dset.__getitem__[DType.int32](()),
+        dset[()].read_scalar[DType.int32](),
         Int32(7),
         "dset[()] should read back the value written via dset[()] = value",
     )

@@ -27,7 +27,9 @@ I'm working on porting some particle physics simulation libraries to Mojo. Since
   plus filter metadata accessors (`compression()`, `shuffle()`, etc.)
 - Hyperslab, slice (`read_slice`/`write_slice`), and point
   (`read_point`/`write_point`) I/O on datasets
-- Scalar dataset support, including h5py-style `dset[()]` indexing
+- h5py-style indexing: `dset[1:3, 2].read[f64]()`, `dset[..., 0]`, `dset[0:3, 1] = arr`
+  (unit-stride slices, ints, `...`), and `f.attrs["k"] = v` attribute syntax
+- Scalar dataset support via `dset[()]`
 - `require_group` / `require_dataset` helpers, `get_opt()` for non-raising
   lookups
 - Automatic library discovery via pixi
@@ -138,27 +140,33 @@ pixi install
 from hdf5 import File, f64, i32
 
 def main() raises:
+    # Handles close themselves when they go out of scope; `with` also works.
     var f = File("data.h5", "r")
 
-    # Access datasets and groups with .get() method
-    var obj = f.get("group/dataset")
-    if obj.is_dataset():
-        var dset = obj.dataset()
-        print(dset.shape())   # [100, 50]
-        print(dset.dtype())   # "float64"
-        
-        # Read all data into an NuMojo NDArray
-        var arr = dset.read[f64]()
-        print("arr: ", arr)
+    # Open datasets/groups directly (or with f.get(...) for unknown kinds)
+    var dset = f.dataset("group/dataset")
+    print(dset.shape())   # [100, 50]
+    print(dset.dtype())   # "float64"
+
+    # Read everything into a NuMojo NDArray
+    var arr = dset.read[f64]()
+
+    # h5py-style indexing: integers drop an axis, slices and `...` keep it.
+    # `dset[...]` is a lazy Selection; finish it with .read / .read_scalar.
+    var row = dset[0, :].read[f64]()             # shape [50]
+    var block = dset[10:20, ..., 0:5].read[f64]()
+    var x = dset[3, 4].read_scalar[f64]()
+
+    # Chained access
+    var y = f["group"].group()["dataset"].dataset()
 
     # Iterate over root-level items
     for name in f.keys():
         print(name)
 
-    # Read attributes
-    var version = f.attrs().get[i32]("version", Int32(0))
-
-    f.close()
+    # Attributes: item syntax, typed read via AttrValue
+    var version = f.attrs["version"].as_scalar[i32]()
+    var has = "version" in f.attrs
 ```
 
 ### Writing a file
@@ -186,10 +194,13 @@ def main() raises:
     buf.unsafe_free()
     # You can also pass a NDArray directly as buffer.
 
-    # Write attributes
-    f.attrs().set[i32]("version", Int32(1))
+    # Write into a region: arrays, or a scalar broadcast over the selection
+    dset[0:10, 0] = Scalar[f64](0.0)
+    # dset[0, :] = some_ndarray
 
-    f.close()
+    # Write attributes (Int, Float64, String, scalars and NDArrays convert)
+    f.attrs["version"] = Int32(1)
+    f.attrs["units"] = "m/s"
 ```
 
 ### Context manager and attribute inspection
@@ -201,7 +212,7 @@ def main() raises:
     with File("output.h5", "a", track_order=True) as f:
         for name in f:                      # iterate over member names
             print(name)
-        for item in f.attrs().items():      # (name, AttrValue) pairs
+        for item in f.attrs.items():      # (name, AttrValue) pairs
             print(item[0], item[1].dtype, item[1].shape)
 ```
 
@@ -232,7 +243,7 @@ examples/
 
 **File fails to open** — Ensure `libhdf5.dylib` is accessible. If using pixi, run `pixi install` first so `$CONDA_PREFIX` is set.
 
-**Memory leak warnings** — Call `.close()` on `File` when done, or use `with File(...) as f:`. A `File` also closes itself when its last copy is destroyed; `Group`/`Dataset` handles should be closed explicitly.
+**Memory leak warnings** — Call `.close()` on `File` when done, or use `with File(...) as f:`. `File`, `Group` and `Dataset` close themselves when their last copy is destroyed; `close()` is optional and idempotent.
 
 **"dataset already exists" on write** — The write helpers refuse to overwrite existing datasets. Choose a new path or recreate the file.
 

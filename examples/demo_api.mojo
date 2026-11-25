@@ -19,18 +19,17 @@
 #
 # Topics demonstrated:
 #   - Opening a file for reading:  File(path, mode)
-#   - Reading scalar attributes:   group.attrs().read_scalar[dtype](name)
-#   - Reading datasets:            dset.read_all[dtype]()
+#   - Reading scalar attributes:   group.attrs["name"].as_scalar[dtype]()
+#   - Reading datasets:            dset.read[dtype](), dset[rows, col].read[dtype]()
 #   - NDArray shape and indexing:  .dim0, .dim1, .size(), arr.get(i), arr.get(row, col)
-#   - Freeing heap buffers:        .unsafe_free()
+#   - Writing with indexing:       dset[...] = arr, dset[0, 0:2] = value
 #   - Creating a file for writing: File(path, "w")
 #   - Creating groups:             require_group(name)
-#   - Writing datasets:           create_dataset_with_data[dtype](name, shape, ptr)
-#   - Closing handles:            f.close()
+#   - Creating datasets:           create_dataset[dtype](name, shape)
+#   - Closing handles:            automatic when the last copy goes away; f.close() is optional
 
-from std.memory.alloc import unsafe_alloc
-from hdf5 import File, f64, f32, i32, i64
-from numojo.prelude import NDArray
+from hdf5 import File, f64, f32, i32
+from numojo.prelude import NDArray, Shape
 
 
 def main() raises:
@@ -40,16 +39,15 @@ def main() raises:
     var f = File("./examples/demo_data.h5", "r")
 
     # ===----------------------------------------------------------------------=== #
-    # 2. Read scalar attributes
+    # 2. Read attributes with h5py-style item access
     # ===----------------------------------------------------------------------=== #
-    # Attributes can be Float64 or Int32 (pass the matching dtype).
-    var meta_obj = f.get("/metadata")
-    var meta = meta_obj.group()
-    var num_days = meta.attrs().read_scalar[i32]("num_days")
-    var num_stations = meta.attrs().read_scalar[i32]("num_stations")
-    var base_year = meta.attrs().read_scalar[i32]("base_year")
-    var lat_origin = meta.attrs().read_scalar[f64]("lat_origin")
-    meta.close()
+    # f["/metadata"] returns an H5Object; f.group(path) / f.dataset(path) open
+    # the member directly. Attributes are read back with the dtype you expect.
+    var meta = f.group("/metadata")
+    var num_days = meta.attrs["num_days"].as_scalar[i32]()
+    var num_stations = meta.attrs["num_stations"].as_scalar[i32]()
+    var base_year = meta.attrs["base_year"].as_scalar[i32]()
+    var lat_origin = meta.attrs["lat_origin"].as_scalar[f64]()
 
     print("=== Metadata attributes ===")
     print("  num_days     =", num_days)
@@ -58,30 +56,18 @@ def main() raises:
     print("  lat_origin   =", lat_origin, "°N")
 
     # ===----------------------------------------------------------------------=== #
-    # 3. Read a 1-D Float64 dataset
-    # Shape is discovered automatically — no need to pass a size.
+    # 3. Read whole datasets
     # ===----------------------------------------------------------------------=== #
-    var elevation_obj = f.get("/sensors/elevation_m")
-    var elevation_dset = elevation_obj.dataset()
-    var elevation = elevation_dset.read[f64]()
-    elevation_dset.close()
-
+    # Handles close themselves; no explicit close() needed.
+    var elevation = f.dataset("/sensors/elevation_m").read[f64]()
     print("\n=== 1-D Float64: /sensors/elevation_m ===")
-    print("  length (dim0) =", elevation.shape)
-    print("  total elements:", elevation.size)
+    print("  shape:", elevation.shape, " size:", elevation.size)
     print("  values:", end="")
     for i in range(elevation.shape[0]):
         print("", elevation.item(i), end="")
     print()
 
-    # ===----------------------------------------------------------------------=== #
-    # 4. Read a 1-D Int32 dataset
-    # ===----------------------------------------------------------------------=== #
-    var station_id_obj = f.get("/sensors/station_id")
-    var station_id_dset = station_id_obj.dataset()
-    var station_id = station_id_dset.read[i32]()
-    station_id_dset.close()
-
+    var station_id = f.dataset("/sensors/station_id").read[i32]()
     print("\n=== 1-D Int32: /sensors/station_id ===")
     print("  values:", end="")
     for i in range(station_id.shape[0]):
@@ -89,130 +75,90 @@ def main() raises:
     print()
 
     # ===----------------------------------------------------------------------=== #
-    # 5. Read a 2-D Float64 dataset
-    # arr[row, col] — row-major indexing.
+    # 4. Index datasets like h5py: ints drop an axis, slices keep it, `...`
+    #    expands. Only the selected region is read from disk.
     # ===----------------------------------------------------------------------=== #
-    var temp_obj = f.get("/observations/temperature_c")
-    var temp_dset = temp_obj.dataset()
-    var temp = temp_dset.read[f64]()
-    temp_dset.close()
-
+    var temp_dset = f.dataset("/observations/temperature_c")
     print("\n=== 2-D Float64: /observations/temperature_c ===")
-    print("  shape:", temp.shape[0], "×", temp.shape[1], " (days × stations)")
-    print("  total elements:", temp.size)
+    print("  shape:", temp_dset.shape()[0], "×", temp_dset.shape()[1])
+
+    var row0 = temp_dset[0, :].read[f64]()  # day 1, all stations
     print("  row 0 (day 1):", end="")
-    for s in range(Int(num_stations)):
-        print("", temp.item(0, s), end="")
-    # or use ndarray syntax to get the first row with temp[0, :]!
+    for s in range(row0.shape[0]):
+        print("", row0.item(s), end="")
     print()
+
+    var col0 = temp_dset[0:5, 0].read[f64]()  # station 1, first 5 days
     print("  col 0 (station 1, first 5 days):", end="")
-    for d in range(5):
-        print("", temp.item(d, 0), end="")
-    # or use temp[:, 0] to get the first column (all days for station 1).
+    for d in range(col0.shape[0]):
+        print("", col0.item(d), end="")
     print()
 
-    # ===----------------------------------------------------------------------=== #
-    # 6. Read a 2-D Float32 dataset
-    # ===----------------------------------------------------------------------=== #
-    var humidity_obj = f.get("/observations/humidity_pct")
-    var humidity_dset = humidity_obj.dataset()
-    var humidity = humidity_dset.read[f32]()
-    humidity_dset.close()
+    print("  temp[3, 2] =", temp_dset[3, 2].read_scalar[f64]())
 
+    # ===----------------------------------------------------------------------=== #
+    # 5. Read a Float32 dataset
+    # ===----------------------------------------------------------------------=== #
+    var humidity_dset = f.dataset("/observations/humidity_pct")
     print("\n=== 2-D Float32: /observations/humidity_pct ===")
-    print("  shape:", humidity.shape[0], "×", humidity.shape[1])
-    print("  humidity[0, 0] =", humidity.item(0, 0), "%")
-    print("  humidity[14,2] =", humidity.item(14, 2), "%")
+    print("  humidity[0, 0] =", humidity_dset[0, 0].read_scalar[f32](), "%")
+    print("  humidity[14,2] =", humidity_dset[14, 2].read_scalar[f32](), "%")
 
     # ===----------------------------------------------------------------------=== #
-    # 7. Free file buffer
-    # ===----------------------------------------------------------------------=== #
-    f.close()
-
-    # ===----------------------------------------------------------------------=== #
-    # 8. Write a new file
+    # 6. Write a new file
     # ===----------------------------------------------------------------------=== #
     # File(..., "w") truncates any existing file at the given path.
     var out = File("./examples/demo_output.h5", "w")
-
-    # require_group creates the named group; safe to call if it already exists.
     var summary = out.require_group("/summary")
     var daily = summary.require_group("daily")
+    summary.attrs["source"] = "demo_data.h5"  # strings, ints, floats, arrays
 
-    # Write a 1-D Float64 dataset.
-    var means = unsafe_alloc[Float64](Int(num_stations))
-    means[unsafe_offset=0] = 22.1
-    means[unsafe_offset=1] = 19.8
-    means[unsafe_offset=2] = 25.3
-    means[unsafe_offset=3] = 17.6
-    means[unsafe_offset=4] = 21.0
-    var means_shape = List[Int]()
-    means_shape.append(Int(num_stations))
-    var means_dset = summary.create_dataset_with_data[f64](
-        "mean_temp_c", means_shape, means
-    )
-    means_dset.close()
-    means.unsafe_free()
+    # Create a dataset, then fill it with `dset[...] = array`.
+    var n_stat = Int(num_stations)
+    var means = NDArray[f64](Shape(n_stat))
+    means.unsafe_ptr()[unsafe_offset=0] = 22.1
+    means.unsafe_ptr()[unsafe_offset=1] = 19.8
+    means.unsafe_ptr()[unsafe_offset=2] = 25.3
+    means.unsafe_ptr()[unsafe_offset=3] = 17.6
+    means.unsafe_ptr()[unsafe_offset=4] = 21.0
+    var means_dset = summary.create_dataset[f64]("mean_temp_c", [n_stat])
+    means_dset[...] = means
+    means_dset.attrs["units"] = "degC"
 
-    # Write a 2-D Float64 dataset (3 days × 5 stations, row-major).
-    var n_days_out = 3
-    var n_stat_out = Int(num_stations)
-    var excerpt = unsafe_alloc[Float64](n_days_out * n_stat_out)
-    for d in range(n_days_out):
-        for s in range(n_stat_out):
-            excerpt[unsafe_offset=d * n_stat_out + s] = Float64(d * 10 + s)
-    var excerpt_shape = List[Int]()
-    excerpt_shape.append(n_days_out)
-    excerpt_shape.append(n_stat_out)
-    var excerpt_dset = daily.create_dataset_with_data[f64](
-        "temp_excerpt", excerpt_shape, excerpt
-    )
-    excerpt_dset.close()
-    excerpt.unsafe_free()
-
-    daily.close()
-    summary.close()
+    # A 3 × 5 dataset: fill with zeros (a scalar broadcasts), then overwrite
+    # one row with an array.
+    var excerpt = daily.create_dataset[f64]("temp_excerpt", [3, n_stat])
+    excerpt[...] = Float64(0)
+    var row1 = NDArray[f64](Shape(n_stat))
+    for s in range(n_stat):
+        row1.unsafe_ptr()[unsafe_offset=s] = Float64(10 + s)
+    excerpt[1, :] = row1
+    excerpt[2, 0:2] = Float64(-1)
 
     out.close()
     print("\n=== Wrote demo_output.h5 ===")
     print("  /summary/mean_temp_c          — 1-D Float64, length", num_stations)
-    print(
-        "  /summary/daily/temp_excerpt   — 2-D Float64,",
-        n_days_out,
-        "×",
-        num_stations,
-    )
+    print("  /summary/daily/temp_excerpt   — 2-D Float64, 3 ×", num_stations)
 
     # ===----------------------------------------------------------------------=== #
-    # 9. Round-trip: read back what we wrote
+    # 7. Round-trip: read back what we wrote
     # ===----------------------------------------------------------------------=== #
     var r = File("./examples/demo_output.h5", "r")
-
-    var summary_obj = r.get("/summary")
-    var summary_r = summary_obj.group()
-
-    var mean_obj = summary_r.get("mean_temp_c")
-    var mean_dset = mean_obj.dataset()
-    var mean_back = mean_dset.read[f64]()
-    mean_dset.close()
+    var mean_back = r["summary"]["mean_temp_c"].dataset().read[f64]()
     print("\n=== Round-trip read ===")
     print("  mean_temp_c:", end="")
     for i in range(mean_back.shape[0]):
         print("", mean_back.item(i), end="")
     print()
 
-    var daily_obj = summary_r.get("daily")
-    var daily_r = daily_obj.group()
-
-    var exc_obj = daily_r.get("temp_excerpt")
-    var exc_dset = exc_obj.dataset()
-    var exc_back = exc_dset.read[f64]()
-    exc_dset.close()
-    print("  temp_excerpt shape:", exc_back.shape[0], "×", exc_back.shape[1])
-    print("  exc_back[1, 2] =", exc_back.item(1, 2), " (expected 12.0)")
-
-    daily_r.close()
-    summary_r.close()
+    var exc = r.dataset("/summary/daily/temp_excerpt")
+    print("  exc[1, 2]  =", exc[1, 2].read_scalar[f64](), " (expected 12.0)")
+    print("  exc[2, 1]  =", exc[2, 1].read_scalar[f64](), " (expected -1.0)")
+    print("  source attr:", r.group("summary").attrs["source"].as_string())
+    print(
+        "  units attr :",
+        r.dataset("/summary/mean_temp_c").attrs["units"].as_string(),
+    )
     r.close()
 
     print("\nDone.")

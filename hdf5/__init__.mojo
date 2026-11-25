@@ -13,14 +13,11 @@ Example usage:
     from hdf5 import File
     from numojo.prelude import NDArray
 
-    var f = File("data.h5", "r")
-    var obj = f.get("mydataset")
-    if obj.is_dataset():
-        var dset = obj.dataset()
+    with File("data.h5", "r") as f:
+        var dset = f.dataset("mydataset")
         print(dset.shape(), dset.dtype())
-    for name in f.keys():
-        print(name)
-    f.close()
+        var row = dset[0, :].read[f64]()      # h5py-style slicing
+        print(f.attrs["version"].as_scalar[DType.int32]())
     ```
 
 For direct access to the HDF5 C API import ``hdf5.ffi`` instead.
