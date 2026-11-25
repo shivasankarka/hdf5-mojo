@@ -1018,13 +1018,23 @@ struct _ObjHandle(Movable):
     `Dataset`/`Group` copy goes away (or earlier via `close()`)."""
 
     var lib: Pointer[HDF5Lib, MutExt]
+    var lib_arc: Optional[ArcPointer[HDF5Lib]]
+    """Keeps the library loaded while any object is open, even after the
+    `File` that created it is gone."""
     var id: hid_t
     var kind: Int
     """0 = dataset, 1 = group, 2 = borrowed id that is never closed."""
     var is_open: Bool
 
-    def __init__(out self, lib: Pointer[HDF5Lib, MutExt], id: hid_t, kind: Int):
+    def __init__(
+        out self,
+        lib: Pointer[HDF5Lib, MutExt],
+        id: hid_t,
+        kind: Int,
+        lib_arc: Optional[ArcPointer[HDF5Lib]] = None,
+    ):
         self.lib = lib
+        self.lib_arc = lib_arc.copy()
         self.id = id
         self.kind = kind
         self.is_open = id >= 0
@@ -1043,6 +1053,9 @@ struct _ObjHandle(Movable):
                 _ = self.lib[].close_dataset(self.id)
             elif self.kind == 1:
                 _ = self.lib[].close_group(self.id)
+        # `deinit` destroys fields as soon as they are last used; touch
+        # `lib_arc` here so the library outlives the close call above.
+        _ = self.lib_arc.copy()
 
 
 # ===----------------------------------------------------------------------=== #
@@ -1298,6 +1311,7 @@ struct Dataset[
         dtype_code: Int,
         name: String,
         filename: String = "",
+        lib_arc: Optional[ArcPointer[HDF5Lib]] = None,
     ):
         self._did = did
         self._shape = shape.copy()
@@ -1308,7 +1322,10 @@ struct Dataset[
         self._closed_bool = False
         self._handle = ArcPointer(
             _ObjHandle(
-                Pointer[HDF5Lib, MutExt](unsafe_from_address=Int(lib)), did, 0
+                Pointer[HDF5Lib, MutExt](unsafe_from_address=Int(lib)),
+                did,
+                0,
+                lib_arc,
             )
         )
         self.attrs = AttributeManager[Self.origin](lib, did, self._handle)
@@ -1333,12 +1350,6 @@ struct Dataset[
         self._closed_bool = False
         self._handle = handle
         self.attrs = AttributeManager[Self.origin](lib, did, handle)
-
-    def __deinit__(deinit self):
-        # An explicit destructor keeps the whole object (including the shared
-        # handle) alive until its last use; without it Mojo destroys the
-        # unused `_handle` field early and closes the id too soon.
-        pass
 
     def __enter__(self) -> Self:
         """Enter a ``with`` block; the dataset is closed on exit."""
@@ -2374,6 +2385,7 @@ struct Group[
         name: String,
         is_file: Bool = False,
         filename: String = "",
+        lib_arc: Optional[ArcPointer[HDF5Lib]] = None,
     ):
         self._gid = gid
         self._name = name
@@ -2386,15 +2398,10 @@ struct Group[
                 Pointer[HDF5Lib, MutExt](unsafe_from_address=Int(lib)),
                 gid,
                 2 if is_file else 1,
+                lib_arc,
             )
         )
         self.attrs = AttributeManager[Self.origin](lib, gid, self._handle)
-
-    def __deinit__(deinit self):
-        # An explicit destructor keeps the whole object (including the shared
-        # handle) alive until its last use; without it Mojo destroys the
-        # unused `_handle` field early and closes the id too soon.
-        pass
 
     def __enter__(self) -> Self:
         """Enter a ``with`` block; the group is closed on exit."""
@@ -2634,7 +2641,13 @@ struct Group[
         else:
             full_name = full_name + "/" + name
         return Dataset[Self.origin](
-            self._lib, did, read_shape, dtype_code, full_name, self._filename
+            self._lib,
+            did,
+            read_shape,
+            dtype_code,
+            full_name,
+            self._filename,
+            lib_arc=self._handle[].lib_arc,
         )
 
     def visit_names(self) raises -> List[String]:
@@ -2768,7 +2781,13 @@ struct Group[
                 full_name = "/" + member_name
             else:
                 full_name = full_name + "/" + member_name
-            var g = Group(self._lib, gid, full_name, filename=self._filename)
+            var g = Group(
+                self._lib,
+                gid,
+                full_name,
+                filename=self._filename,
+                lib_arc=self._handle[].lib_arc,
+            )
             return H5Object[Self.origin](g^)
 
         if otype == H5I_DATASET:
@@ -2806,7 +2825,13 @@ struct Group[
             full_name = full_name + "/" + member_name
 
         return Dataset[Self.origin](
-            self._lib, did, shape, dtype_code, full_name, self._filename
+            self._lib,
+            did,
+            shape,
+            dtype_code,
+            full_name,
+            self._filename,
+            lib_arc=self._handle[].lib_arc,
         )
 
     def create_group(
@@ -2842,6 +2867,7 @@ struct Group[
                 current_path,
                 True,  # borrows self's id, so never closes it
                 self._filename,
+                lib_arc=self._handle[].lib_arc,
             )
 
         var prev_gid: hid_t = -1
@@ -2868,7 +2894,11 @@ struct Group[
                 current_path = current_path + "/" + part
 
         return Group[Self.origin](
-            self._lib, current_gid, current_path, filename=self._filename
+            self._lib,
+            current_gid,
+            current_path,
+            filename=self._filename,
+            lib_arc=self._handle[].lib_arc,
         )
 
     def require_group(self, name: String) raises -> Group[Self.origin]:
@@ -2893,7 +2923,11 @@ struct Group[
             else:
                 full_name = full_name + "/" + name
             return Group[Self.origin](
-                self._lib, gid, full_name, filename=self._filename
+                self._lib,
+                gid,
+                full_name,
+                filename=self._filename,
+                lib_arc=self._handle[].lib_arc,
             )
         return self.create_group(name)
 
@@ -3066,6 +3100,7 @@ struct Group[
             _dtype_code[dtype](),
             full_name,
             self._filename,
+            lib_arc=self._handle[].lib_arc,
         )
 
     def create_string_dataset(
@@ -3101,7 +3136,13 @@ struct Group[
         else:
             full_name = full_name + "/" + name
         return Dataset[Self.origin](
-            self._lib, did, shape.copy(), 11, full_name, self._filename
+            self._lib,
+            did,
+            shape.copy(),
+            11,
+            full_name,
+            self._filename,
+            lib_arc=self._handle[].lib_arc,
         )
 
     def create_dataset_with_strings(
@@ -3303,7 +3344,13 @@ struct Group[
         _ = self._lib[].close_type(tid)
 
         return Dataset[Self.origin](
-            self._lib, did, read_shape, dtype_code, full_name, self._filename
+            self._lib,
+            did,
+            read_shape,
+            dtype_code,
+            full_name,
+            self._filename,
+            lib_arc=self._handle[].lib_arc,
         )
 
 
@@ -3579,7 +3626,7 @@ struct File(Copyable, Movable):
             True if the member exists, False otherwise.
         """
         var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
         return root.__contains__(member_name)
 
@@ -3650,7 +3697,7 @@ struct File(Copyable, Movable):
 
     def _root(self) -> Group[origin_of(self._lib[])]:
         return Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
 
     def move(self, source: String, dest: String) raises:
@@ -3724,7 +3771,9 @@ struct File(Copyable, Movable):
         Raises:
             Error: If listing fails.
         """
-        var root = Group(self._lib_ptr(), self._fid, "/", is_file=True)
+        var root = Group(
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
+        )
         return root.keys()
 
     def values(self) raises -> List[H5Object[origin_of(self._lib[])]]:
@@ -3737,7 +3786,7 @@ struct File(Copyable, Movable):
             Error: If listing fails.
         """
         var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
         return root.values()
 
@@ -3756,7 +3805,7 @@ struct File(Copyable, Movable):
             Error: If the member does not exist or cannot be opened.
         """
         var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
         return root.__getitem__(member_name)
 
@@ -3787,7 +3836,7 @@ struct File(Copyable, Movable):
             Error: If not a dataset or cannot be opened.
         """
         var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
         return root._open_dataset(member_name)
 
@@ -3807,7 +3856,7 @@ struct File(Copyable, Movable):
             Error: If creation fails.
         """
         var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
         return root.create_group(name, track_order)
 
@@ -3826,7 +3875,7 @@ struct File(Copyable, Movable):
             Error: If path exists but is not a group.
         """
         var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
         return root.require_group(name)
 
@@ -3855,7 +3904,7 @@ struct File(Copyable, Movable):
             Error: If the name exists but is not a dataset, or creation fails.
         """
         var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
         return root.require_dataset[dtype](name, shape)
 
@@ -3876,7 +3925,7 @@ struct File(Copyable, Movable):
     ) raises -> Dataset[origin_of(self._lib[])] where SupportedDType[dtype]:
         """Create a root-level dataset; see ``Group.create_dataset``."""
         var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
         return root.create_dataset[dtype](
             name,
@@ -3917,7 +3966,7 @@ struct File(Copyable, Movable):
     ] where SupportedDType[dtype]:
         """Create a scalar dataset at the root level."""
         var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
         return root.create_scalar_dataset[dtype](name, value)
 
@@ -4007,7 +4056,7 @@ struct File(Copyable, Movable):
             Error: If creation or writing fails.
         """
         var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
         return root.create_dataset_with_data[dtype](name, shape, data)
 
@@ -4018,7 +4067,7 @@ struct File(Copyable, Movable):
     ] where SupportedDType[dtype]:
         """Create a root-level dataset and write a NuMojo NDArray to it."""
         var root = Group[origin_of(self._lib[])](
-            self._lib_ptr(), self._fid, "/", is_file=True
+            self._lib_ptr(), self._fid, "/", is_file=True, lib_arc=self._lib
         )
         return root.create_dataset_with_data[dtype](name, data)
 

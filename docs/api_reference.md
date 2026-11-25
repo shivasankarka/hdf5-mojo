@@ -22,7 +22,7 @@ the HDF5 hierarchy.
 | `filename()` | Return the filename path. |
 | `mode()` | Return the access mode string. |
 | `name()` | Return `"/"` (root group name). |
-| `attrs()` | Return `AttributeManager` for file-level attributes. |
+| `attrs` | `AttributeManager` field for file-level attributes (`f.attrs["k"] = v`; `attrs()` still works). |
 | `__bool__()` | `True` if the file is open. |
 
 **Access**
@@ -75,6 +75,7 @@ the HDF5 hierarchy.
 |--------|-------------|
 | `close()` | Close the file and release resources (idempotent; copies share state). |
 | `with File(...) as f:` | Context manager; closes the file on exit. |
+| `dataset(path)` / `group(path)` | Open a dataset/group directly (raises if missing or of the other kind). |
 | `flush()` | Flush pending writes to disk. |
 
 ---
@@ -89,8 +90,10 @@ Represents an HDF5 group with dict-like access to members. Obtained via
 | Method | Description |
 |--------|-------------|
 | `name()` | Full path of the group. |
-| `attrs()` | `AttributeManager` for group attributes. |
+| `attrs` | `AttributeManager` field for group attributes (`attrs()` still works). |
 | `file()` | Path of the file this group belongs to. |
+| `dataset(name)` / `group(name)` | Open a member dataset/group directly. |
+| `with g:` / `close()` | Closes on exit; also closes automatically when the last copy is destroyed. |
 | `parent()` | Path of the parent group. |
 
 **Access**
@@ -161,7 +164,7 @@ Represents an HDF5 dataset containing array data.
 | `len(dset)` | Size of the first axis (0 for a scalar dataset). |
 | `nbytes()` | Total size in bytes (`size() * itemsize`). |
 | `name()` | Full path of the dataset. |
-| `attrs()` | `AttributeManager` for dataset attributes. |
+| `attrs` | `AttributeManager` field for dataset attributes (`attrs()` still works). |
 | `file()` | Path of the file this dataset belongs to. |
 | `parent()` | Path of the parent group. |
 
@@ -261,12 +264,14 @@ Polymorphic wrapper for `Group` or `Dataset`, returned by `get()` /
 ## AttributeManager
 
 Dict-like proxy for HDF5 attributes on `File`, `Group`, or `Dataset`
-objects. Access via `.attrs()`:
+objects. Access via the `.attrs` field:
 
 ```mojo
-var version = f.attrs().get[DType.int32]("version", Int32(0))  # read with default
-f.attrs().set[DType.int32]("created", Int32(42))               # write (overwrites existing)
-f.attrs().delete("temp_attr")                                  # delete
+f.attrs["created"] = Int32(42)                  # write (overwrites existing)
+f.attrs["units"] = "m/s"                        # String, scalars, NDArray convert implicitly
+var v = f.attrs["created"].as_scalar[DType.int32]()   # read via AttrValue
+var d = f.attrs.get[DType.int32]("version", Int32(0)) # read with default
+del f.attrs["temp_attr"]                        # delete
 ```
 
 **Access**
@@ -274,8 +279,8 @@ f.attrs().delete("temp_attr")                                  # delete
 | Method | Description |
 |--------|-------------|
 | `__contains__(name)` / `contains(name)` | Check if an attribute exists. |
-| `__getitem__[dtype](name)` | Read an attribute value (raises if missing). |
-| `__setitem__[dtype](name, value)` | Write an attribute value. |
+| `__getitem__(name)` | Read an attribute as an `AttrValue` (raises if missing). |
+| `__setitem__(name, value)` | Write an attribute; `value` converts implicitly to `AttrValue` (scalars, `Int`, `Float64`, `String`, `NDArray`). |
 | `read_scalar[dtype](name)` | Read an attribute value (raises if missing). |
 | `write_scalar[dtype](name, value)` | Write an attribute value; overwrites an existing attribute of the same name. |
 | `get[dtype](name, default)` | Read an attribute value, or `default` if absent. |
@@ -311,7 +316,7 @@ Returned by `get_link(name)`. Fields: `kind` (`"hard"`, `"soft"` or
 
 ## AttrValue
 
-Type-erased attribute value returned by `attrs().get_value()`, `items()` and
+Type-erased attribute value returned by `attrs[name]`, `attrs.get_value()`, `items()` and
 `values()`. Fields: `dtype` (e.g. `"float64"`) and `shape` (`[]` for scalars).
 
 | Method | Description |
